@@ -1,0 +1,6 @@
+{
+  "name": "JTEC Cloud Dashboard",
+  "description": "Secure, premium web dashboard for managing independent Supabase music projects with real storage metrics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
