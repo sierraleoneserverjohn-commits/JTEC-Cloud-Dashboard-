@@ -13,7 +13,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import type { SupabaseProjectSummary, ConnectionTestResult, DiagnosticCheck } from '../types/dashboard';
-import { testProjectConnection } from '../services/dashboardService';
+import { testProjectConnection, runSelfTestClientSide } from '../services/dashboardService';
 
 interface DiagnosticsModalProps {
   project: SupabaseProjectSummary;
@@ -102,16 +102,32 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
     setPhase1Steps([]);
 
     try {
-      const res = await fetch(`/api/projects/${project.id}/run-self-test`, {
-        method: 'POST',
-      });
-      const data = await res.json();
-      setPhase1Steps(data.steps || []);
+      let executed = false;
+      try {
+        const res = await fetch(`/api/projects/${project.id}/run-self-test`, {
+          method: 'POST',
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setPhase1Steps(data.steps || []);
+          if (data.success) {
+            setPhase1Summary(data.message || 'All Phase 1 tests passed successfully.');
+          } else {
+            setPhase1Error(data.error || 'One or more verification steps failed.');
+          }
+          executed = true;
+        }
+      } catch {}
 
-      if (data.success) {
-        setPhase1Summary(data.message || 'All Phase 1 tests passed successfully on live backend.');
-      } else {
-        setPhase1Error(data.error || 'One or more verification steps failed.');
+      if (!executed) {
+        // Direct client-side execution for GitHub Pages
+        const data = await runSelfTestClientSide(project.id);
+        setPhase1Steps(data.steps || []);
+        if (data.success) {
+          setPhase1Summary(data.message || 'All Phase 1 tests passed successfully via direct client connection.');
+        } else {
+          setPhase1Error(data.error || 'One or more verification steps failed.');
+        }
       }
       onRefreshProject();
     } catch (err: any) {

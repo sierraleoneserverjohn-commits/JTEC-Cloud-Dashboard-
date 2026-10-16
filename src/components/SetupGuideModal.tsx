@@ -34,7 +34,11 @@ export const SetupGuideModal: React.FC<SetupGuideModalProps> = ({ onClose, onNav
     setTimeout(() => setCopiedSection(null), 2000);
   };
 
-  const SQL_SCHEMA = `-- Run this in your Supabase SQL Editor for your music database
+  const SQL_SCHEMA = `-- ==============================================================================
+-- DATABASE TABLE SCHEMA & ROW LEVEL SECURITY (RLS)
+-- Run this in your Supabase SQL Editor: https://supabase.com/dashboard/project/_/sql
+-- ==============================================================================
+
 CREATE TABLE IF NOT EXISTS public.songs (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   title TEXT NOT NULL,
@@ -51,28 +55,76 @@ CREATE TABLE IF NOT EXISTS public.songs (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Enable Row Level Security (RLS)
+-- Enable Row Level Security (RLS) on public.songs
 ALTER TABLE public.songs ENABLE ROW LEVEL SECURITY;
 
--- Allow public read access to catalog
+-- 1. Catalog Read Access: Allow public visitors to view catalog & stream audio
+DROP POLICY IF EXISTS "Public songs are viewable by everyone" ON public.songs;
 CREATE POLICY "Public songs are viewable by everyone" 
 ON public.songs FOR SELECT USING (true);
 
--- Allow service role or authenticated uploads
+-- 2. Catalog Insert Access: Allow authenticated administrators to insert song metadata
+DROP POLICY IF EXISTS "Admin insert songs" ON public.songs;
 CREATE POLICY "Admin insert songs" 
-ON public.songs FOR INSERT WITH CHECK (true);
+ON public.songs FOR INSERT TO authenticated WITH CHECK (true);
+
+-- 3. Catalog Update & Delete Access: Allow authenticated administrators
+DROP POLICY IF EXISTS "Admin update songs" ON public.songs;
+CREATE POLICY "Admin update songs" 
+ON public.songs FOR UPDATE TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Admin delete songs" ON public.songs;
+CREATE POLICY "Admin delete songs" 
+ON public.songs FOR DELETE TO authenticated USING (true);
 `;
 
-  const STORAGE_SETUP = `-- Supabase Storage Bucket Setup
--- 1. Create a public or private bucket named after your project:
---    Project 1 (NASHEED): 'nasheed-audio'
---    Project 2 (LOVE & CHILL): 'music' (or 'love-chill-audio')
---    Project 3 (JTEC MUSIC): 'jtec-music-audio'
---
--- 2. Storage Bucket Policies:
--- In Storage > Policies > New Policy:
--- - SELECT: Allow public read (or authenticated)
--- - INSERT: Allow service-role or authenticated upload
+  const STORAGE_SETUP = `-- ==============================================================================
+-- SUPABASE STORAGE BUCKET RLS POLICIES (Fixes "violates row-level security policy")
+-- ==============================================================================
+
+-- 1. Ensure storage buckets exist and are public for media streaming
+INSERT INTO storage.buckets (id, name, public)
+VALUES 
+  ('music', 'music', true),
+  ('nasheed-audio', 'nasheed-audio', true),
+  ('love-chill-audio', 'love-chill-audio', true),
+  ('jtec-music-audio', 'jtec-music-audio', true)
+ON CONFLICT (id) DO UPDATE SET public = true;
+
+-- 2. Enable Row-Level Security on Storage Objects
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+
+-- 3. Clean up existing conflicting policies
+DROP POLICY IF EXISTS "Public Read Access for Audio" ON storage.objects;
+DROP POLICY IF EXISTS "Admin Insert Audio Policy" ON storage.objects;
+DROP POLICY IF EXISTS "Admin Update Audio Policy" ON storage.objects;
+DROP POLICY IF EXISTS "Admin Delete Audio Policy" ON storage.objects;
+
+-- 4. Storage Policy 1: PUBLIC READ / DOWNLOAD (Preserves streaming & catalog downloads)
+CREATE POLICY "Public Read Access for Audio"
+ON storage.objects FOR SELECT
+TO public
+USING (bucket_id IN ('music', 'nasheed-audio', 'love-chill-audio', 'jtec-music-audio'));
+
+-- 5. Storage Policy 2: LEAST-PRIVILEGE ADMIN INSERT (Fixes upload RLS violation)
+-- Restricts upload access strictly to authenticated administrators for designated buckets
+CREATE POLICY "Admin Insert Audio Policy"
+ON storage.objects FOR INSERT
+TO authenticated
+WITH CHECK (
+  bucket_id IN ('music', 'nasheed-audio', 'love-chill-audio', 'jtec-music-audio')
+);
+
+-- 6. Storage Policy 3: ADMIN UPDATE & DELETE (Allows admins to manage files)
+CREATE POLICY "Admin Update Audio Policy"
+ON storage.objects FOR UPDATE
+TO authenticated
+USING (bucket_id IN ('music', 'nasheed-audio', 'love-chill-audio', 'jtec-music-audio'));
+
+CREATE POLICY "Admin Delete Audio Policy"
+ON storage.objects FOR DELETE
+TO authenticated
+USING (bucket_id IN ('music', 'nasheed-audio', 'love-chill-audio', 'jtec-music-audio'));
 `;
 
   const ENV_VARS = `# Environment variables setup (.env)

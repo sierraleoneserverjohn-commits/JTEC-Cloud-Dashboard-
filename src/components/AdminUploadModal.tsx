@@ -10,9 +10,20 @@ import {
   FileAudio,
   HardDrive,
   Loader2,
+  Shield,
+  ShieldCheck,
+  ShieldAlert,
+  LogIn,
+  LogOut,
+  Key,
 } from 'lucide-react';
 import type { SupabaseProjectSummary } from '../types/dashboard';
-import { uploadAudioFile } from '../services/dashboardService';
+import {
+  uploadAudioFile,
+  getAdminUser,
+  adminSignIn,
+  adminSignOut,
+} from '../services/dashboardService';
 
 interface AdminUploadModalProps {
   projects: SupabaseProjectSummary[];
@@ -49,9 +60,66 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [uploadedSong, setUploadedSong] = useState<any | null>(null);
 
+  // Admin authentication state
+  const [adminUser, setAdminUser] = useState<{ email: string; id: string } | null>(null);
+  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [showAuthForm, setShowAuthForm] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
+
+  // Check administrator session whenever selected project changes
+  useEffect(() => {
+    let active = true;
+    setIsLoadingAuth(true);
+    setAuthError(null);
+    getAdminUser(selectedProjectId)
+      .then((user) => {
+        if (active) {
+          setAdminUser(user);
+          setIsLoadingAuth(false);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setAdminUser(null);
+          setIsLoadingAuth(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedProjectId]);
+
+  const handleAdminSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authEmail.trim() || !authPassword) {
+      setAuthError('Please enter administrator email and password.');
+      return;
+    }
+    setIsSigningIn(true);
+    setAuthError(null);
+    const res = await adminSignIn(selectedProjectId, authEmail.trim(), authPassword);
+    setIsSigningIn(false);
+    if (res.success && res.user) {
+      setAdminUser(res.user);
+      setShowAuthForm(false);
+      setAuthPassword('');
+      setErrorMessage(null);
+    } else {
+      setAuthError(res.error || 'Failed to authenticate administrator.');
+    }
+  };
+
+  const handleAdminSignOut = async () => {
+    await adminSignOut(selectedProjectId);
+    setAdminUser(null);
+  };
 
   const handleReturnBack = () => {
     if (onNavigateBack) {
@@ -262,6 +330,88 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Administrator Authentication & Storage RLS Status Card */}
+          <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 p-3 sm:p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {adminUser ? (
+                  <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0" />
+                ) : (
+                  <ShieldAlert className="h-4 w-4 text-amber-400 shrink-0" />
+                )}
+                <div>
+                  <h4 className="text-xs font-semibold text-white flex items-center gap-1.5">
+                    <span>Admin Storage Authorization (RLS)</span>
+                    {adminUser && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-950 border border-emerald-800/80 text-emerald-300">
+                        Authenticated
+                      </span>
+                    )}
+                  </h4>
+                  <p className="text-[11px] text-neutral-400 mt-0.5">
+                    {adminUser
+                      ? `Active session: ${adminUser.email}`
+                      : `Uploads require administrator session to satisfy Storage RLS on '${selectedProject?.storageBucket || 'music'}'.`}
+                  </p>
+                </div>
+              </div>
+
+              {adminUser ? (
+                <button
+                  type="button"
+                  onClick={handleAdminSignOut}
+                  className="flex items-center gap-1 text-[11px] font-medium text-neutral-400 hover:text-white px-2.5 py-1 rounded bg-neutral-800/80 hover:bg-neutral-800 transition-colors cursor-pointer"
+                >
+                  <LogOut className="h-3 w-3" />
+                  <span>Sign Out</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowAuthForm(!showAuthForm)}
+                  className="flex items-center gap-1 text-[11px] font-medium text-neutral-200 hover:text-white px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors cursor-pointer"
+                >
+                  <LogIn className="h-3 w-3 text-amber-400" />
+                  <span>{showAuthForm ? 'Hide Sign In' : 'Sign In as Admin'}</span>
+                </button>
+              )}
+            </div>
+
+            {/* Collapsible Sign In Form */}
+            {(!adminUser || showAuthForm) && (
+              <div className={`pt-2 border-t border-neutral-800/60 ${!showAuthForm && !adminUser ? 'hidden sm:block' : ''}`}>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <input
+                    type="email"
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    placeholder="Admin Email (e.g. admin@example.com)"
+                    className="flex-1 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-xs text-white placeholder-neutral-600 focus:border-neutral-500 focus:outline-none"
+                  />
+                  <input
+                    type="password"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    placeholder="Admin Password"
+                    className="flex-1 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-xs text-white placeholder-neutral-600 focus:border-neutral-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAdminSignIn}
+                    disabled={isSigningIn}
+                    className="flex items-center justify-center gap-1 rounded-lg bg-neutral-100 hover:bg-white text-neutral-950 px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    {isSigningIn ? <Loader2 className="h-3 w-3 animate-spin" /> : <Key className="h-3 w-3" />}
+                    <span>Authenticate</span>
+                  </button>
+                </div>
+                {authError && (
+                  <p className="mt-1.5 text-[11px] text-rose-400">{authError}</p>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Audio File Picker */}
