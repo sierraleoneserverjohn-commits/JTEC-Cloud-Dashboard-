@@ -10,6 +10,10 @@
   color-scheme: dark;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 html, body {
   min-height: 100%;
   min-height: 100dvh;
@@ -72,9 +76,20 @@ body {
   padding-bottom: max(env(safe-area-inset-bottom), 0px);
 }
 
-/* Smooth modal touch scrolling */
+/* Smooth touch scrolling without gesture trapping */
 .touch-scroll {
   -webkit-overflow-scrolling: touch;
-  overscroll-behavior-y: contain;
+  overscroll-behavior: auto;
+  scroll-behavior: smooth;
+}
+
+/* Instant tap responsiveness on touchscreens & eliminate mobile tap delay */
+button,
+[role="button"],
+a,
+input,
+select,
+summary {
+  touch-action: manipulation;
 }
 

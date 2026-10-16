@@ -3,10 +3,19 @@ import { X, ArrowLeft, BookOpen, Copy, Check, Terminal, Database, Shield, HardDr
 
 interface SetupGuideModalProps {
   onClose: () => void;
+  onNavigateHome?: () => void;
 }
 
-export const SetupGuideModal: React.FC<SetupGuideModalProps> = ({ onClose }) => {
+export const SetupGuideModal: React.FC<SetupGuideModalProps> = ({ onClose, onNavigateHome }) => {
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
+
+  const handleReturnHome = () => {
+    if (onNavigateHome) {
+      onNavigateHome();
+    } else {
+      onClose();
+    }
+  };
 
   // Support Escape key to return
   useEffect(() => {
@@ -91,15 +100,23 @@ SUPABASE_TABLE_JTEC_MUSIC="songs"
 `;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm sm:p-3 md:p-6 overflow-hidden safe-top safe-bottom">
-      <div className="relative w-full max-w-3xl h-full sm:h-auto sm:max-h-[90dvh] flex flex-col rounded-none sm:rounded-2xl border-0 sm:border border-neutral-800 bg-neutral-950 shadow-2xl text-neutral-100 overflow-hidden">
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm sm:p-3 md:p-6 overflow-y-auto safe-top safe-bottom p-0"
+    >
+      <div className="relative w-full max-w-3xl h-full sm:h-auto sm:max-h-[90dvh] flex flex-col min-h-0 rounded-none sm:rounded-2xl border-0 sm:border border-neutral-800 bg-neutral-950 shadow-2xl text-neutral-100 overflow-hidden">
         
         {/* Sticky Header Bar with Prominent Back Button */}
         <div className="shrink-0 flex items-center justify-between border-b border-neutral-800/80 px-3 sm:px-6 py-3 bg-neutral-900/80 backdrop-blur-md">
           <div className="flex items-center gap-2">
             <button
-              onClick={onClose}
-              className="flex items-center gap-1.5 text-neutral-300 hover:text-white text-xs font-medium py-1.5 px-2.5 -ml-2 rounded-lg hover:bg-neutral-800/80 transition-colors min-h-[44px] focus:outline-none focus:ring-1 focus:ring-neutral-700"
+              type="button"
+              onClick={handleReturnHome}
+              className="flex items-center gap-1.5 text-neutral-300 hover:text-white text-xs font-semibold py-2 px-3 rounded-lg hover:bg-neutral-800 transition-colors -ml-1 min-h-[44px] focus:outline-none focus:ring-1 focus:ring-neutral-700 cursor-pointer"
               title="Return to Dashboard (or press Esc)"
               aria-label="Back to dashboard"
             >
@@ -114,16 +131,17 @@ SUPABASE_TABLE_JTEC_MUSIC="songs"
             </div>
           </div>
           <button
-            onClick={onClose}
+            type="button"
+            onClick={() => onClose()}
             aria-label="Close dialog"
-            className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
+            className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
         {/* Scrollable Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 touch-scroll">
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-6 touch-scroll">
           {/* Section 1: Architecture Highlights */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
             <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-3.5">
@@ -245,16 +263,16 @@ SUPABASE_TABLE_JTEC_MUSIC="songs"
         <div className="shrink-0 border-t border-neutral-800/80 p-3 sm:px-6 sm:py-3.5 bg-neutral-950/95 flex items-center justify-between gap-3 safe-bottom">
           <button
             type="button"
-            onClick={onClose}
-            className="flex items-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900 px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800 transition-colors min-h-[44px]"
+            onClick={handleReturnHome}
+            className="flex items-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900 px-3.5 py-2.5 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800 transition-colors min-h-[44px] cursor-pointer"
           >
             <ArrowLeft className="h-4 w-4 text-neutral-400" />
             <span>Back to Dashboard</span>
           </button>
           <button
             type="button"
-            onClick={onClose}
-            className="rounded-lg bg-neutral-100 px-4 py-2 text-xs font-semibold text-neutral-950 hover:bg-white transition-colors min-h-[44px]"
+            onClick={() => onClose()}
+            className="rounded-lg bg-neutral-100 px-5 py-2.5 text-xs font-semibold text-neutral-950 hover:bg-white transition-colors min-h-[44px] cursor-pointer shadow-sm active:scale-95"
           >
             Close Guide
           </button>

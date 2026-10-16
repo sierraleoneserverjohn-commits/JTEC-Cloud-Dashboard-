@@ -23,6 +23,7 @@ import { ProjectConfigModal } from './components/ProjectConfigModal';
 import { AdminUploadModal } from './components/AdminUploadModal';
 import { DiagnosticsModal } from './components/DiagnosticsModal';
 import { SetupGuideModal } from './components/SetupGuideModal';
+import { fetchProjects as loadProjectsData } from './services/dashboardService';
 
 export default function App() {
   const [projects, setProjects] = useState<SupabaseProjectSummary[]>([]);
@@ -35,25 +36,25 @@ export default function App() {
 
   // Modal active states
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [configProject, setConfigProject] = useState<SupabaseProjectSummary | null>(null);
-  const [diagnosticsProject, setDiagnosticsProject] = useState<SupabaseProjectSummary | null>(null);
+  const [configProjectId, setConfigProjectId] = useState<string | null>(null);
+  const [diagnosticsProjectId, setDiagnosticsProjectId] = useState<string | null>(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isSetupGuideOpen, setIsSetupGuideOpen] = useState(false);
-  const [isTestRunnerOpen, setIsTestRunnerOpen] = useState(false);
+  const [lastViewedProjectId, setLastViewedProjectId] = useState<string | null>(null);
+
+  // Reactive resolution from projects array
+  const configProject = projects.find((p) => p.id === configProjectId) || null;
+  const diagnosticsProject = projects.find((p) => p.id === diagnosticsProjectId) || null;
 
   const fetchProjects = async () => {
     try {
       setIsRefreshing(true);
       setError(null);
-      const res = await fetch('/api/projects');
-      if (!res.ok) {
-        throw new Error(`Failed to load projects (HTTP ${res.status})`);
-      }
-      const data = await res.json();
+      const data = await loadProjectsData();
       setProjects(data);
     } catch (err: any) {
       console.error('Error fetching projects:', err);
-      setError(err.message || 'Unable to communicate with dashboard backend');
+      setError(err.message || 'Unable to communicate with dashboard');
     } finally {
       setLoading(false);
       setIsRefreshing(false);
@@ -66,97 +67,111 @@ export default function App() {
 
   // Synchronize modal state with URL hash for seamless browser & Android back/forward navigation
   const syncStateFromHash = useCallback((hash: string, currentProjects: SupabaseProjectSummary[]) => {
-    const cleanHash = hash.replace(/^#\/?/, '');
+    const raw = typeof hash === 'string' ? hash : '';
+    const cleanHash = raw.replace(/^#\/?/, '').trim();
+    
     if (!cleanHash || cleanHash === 'dashboard') {
       setSelectedProjectId(null);
-      setConfigProject(null);
-      setDiagnosticsProject(null);
+      setConfigProjectId(null);
+      setDiagnosticsProjectId(null);
       setIsUploadOpen(false);
       setIsSetupGuideOpen(false);
-      setIsTestRunnerOpen(false);
       return;
     }
 
     if (cleanHash.startsWith('project=')) {
-      const id = cleanHash.split('=')[1];
-      setSelectedProjectId(id);
-      setConfigProject(null);
-      setDiagnosticsProject(null);
+      const id = cleanHash.split('=')[1]?.trim();
+      if (id) {
+        setSelectedProjectId(id);
+        setLastViewedProjectId(id);
+      }
+      setConfigProjectId(null);
+      setDiagnosticsProjectId(null);
       setIsUploadOpen(false);
       setIsSetupGuideOpen(false);
-      setIsTestRunnerOpen(false);
     } else if (cleanHash.startsWith('config=')) {
-      const id = cleanHash.split('=')[1];
-      const found = currentProjects.find((p) => p.id === id);
-      if (found) setConfigProject(found);
+      const id = cleanHash.split('=')[1]?.trim();
+      if (id) {
+        setConfigProjectId(id);
+      }
       setSelectedProjectId(null);
-      setDiagnosticsProject(null);
+      setDiagnosticsProjectId(null);
       setIsUploadOpen(false);
       setIsSetupGuideOpen(false);
-      setIsTestRunnerOpen(false);
     } else if (cleanHash.startsWith('diagnostics=')) {
-      const id = cleanHash.split('=')[1];
-      const found = currentProjects.find((p) => p.id === id);
-      if (found) setDiagnosticsProject(found);
+      const id = cleanHash.split('=')[1]?.trim();
+      if (id) {
+        setDiagnosticsProjectId(id);
+      }
       setSelectedProjectId(null);
-      setConfigProject(null);
+      setConfigProjectId(null);
       setIsUploadOpen(false);
       setIsSetupGuideOpen(false);
-      setIsTestRunnerOpen(false);
     } else if (cleanHash === 'upload') {
       setIsUploadOpen(true);
       setSelectedProjectId(null);
-      setConfigProject(null);
-      setDiagnosticsProject(null);
+      setConfigProjectId(null);
+      setDiagnosticsProjectId(null);
       setIsSetupGuideOpen(false);
-      setIsTestRunnerOpen(false);
     } else if (cleanHash === 'schema' || cleanHash === 'guide') {
       setIsSetupGuideOpen(true);
       setSelectedProjectId(null);
-      setConfigProject(null);
-      setDiagnosticsProject(null);
+      setConfigProjectId(null);
+      setDiagnosticsProjectId(null);
       setIsUploadOpen(false);
-      setIsTestRunnerOpen(false);
     } else if (cleanHash === 'verify' || cleanHash === 'phase1') {
       const target = currentProjects.find((p) => p.status === 'connected') || currentProjects[0];
-      if (target) setDiagnosticsProject(target);
-      setIsTestRunnerOpen(true);
+      setDiagnosticsProjectId(target?.id || 'nasheed');
       setSelectedProjectId(null);
-      setConfigProject(null);
+      setConfigProjectId(null);
+      setIsUploadOpen(false);
+      setIsSetupGuideOpen(false);
+    } else {
+      // Unrecognized or corrupted hash - close all modals and show dashboard
+      setSelectedProjectId(null);
+      setConfigProjectId(null);
+      setDiagnosticsProjectId(null);
       setIsUploadOpen(false);
       setIsSetupGuideOpen(false);
     }
   }, []);
 
-  // Update hash when opening/closing modals
-  const navigateTo = (newHash: string) => {
-    if (newHash) {
-      window.location.hash = newHash;
+  // Update hash when opening/closing modals with safe argument handling
+  const navigateTo = (newHash?: unknown) => {
+    const clean = typeof newHash === 'string' ? newHash.replace(/^#\/?/, '').trim() : '';
+    if (clean) {
+      window.location.hash = clean;
+      syncStateFromHash(clean, projects);
     } else {
       if (window.location.hash) {
-        window.history.pushState(null, '', window.location.pathname + window.location.search);
+        try {
+          window.history.pushState(null, '', window.location.pathname + window.location.search);
+        } catch {
+          window.location.hash = '';
+        }
       }
       syncStateFromHash('', projects);
     }
   };
 
-  const handleCloseModal = (fallbackTarget?: string) => {
-    if (fallbackTarget) {
+  const handleCloseModal = (fallbackTarget?: unknown) => {
+    if (typeof fallbackTarget === 'string' && fallbackTarget.trim() !== '') {
       navigateTo(fallbackTarget);
       return;
     }
+    // Instant UI feedback: close modal in state immediately
+    setSelectedProjectId(null);
+    setConfigProjectId(null);
+    setDiagnosticsProjectId(null);
+    setIsUploadOpen(false);
+    setIsSetupGuideOpen(false);
+
     if (window.location.hash) {
-      const prevHash = window.location.hash;
-      window.history.back();
-      // Resilient fallback: if browser back did not clear/change hash (e.g. direct deep link), clear explicitly
-      setTimeout(() => {
-        if (window.location.hash === prevHash) {
-          window.location.hash = '';
-          syncStateFromHash('', projects);
-        }
-      }, 150);
-    } else {
-      navigateTo('');
+      try {
+        window.history.pushState(null, '', window.location.pathname + window.location.search);
+      } catch {
+        window.location.hash = '';
+      }
     }
   };
 
@@ -406,7 +421,7 @@ export default function App() {
         <ProjectDetailsModal
           projectId={selectedProjectId}
           isAdminMode={isAdminMode}
-          onClose={handleCloseModal}
+          onClose={() => handleCloseModal()}
           onOpenConfig={() => navigateTo(`config=${selectedProjectId}`)}
           onOpenTest={() => navigateTo(`diagnostics=${selectedProjectId}`)}
           onOpenUpload={() => navigateTo('upload')}
@@ -416,7 +431,10 @@ export default function App() {
       {configProject && (
         <ProjectConfigModal
           project={configProject}
-          onClose={handleCloseModal}
+          onClose={() => handleCloseModal()}
+          onNavigateHome={() => navigateTo('')}
+          onNavigateBack={lastViewedProjectId ? () => navigateTo(`project=${lastViewedProjectId}`) : undefined}
+          hasPreviousProject={Boolean(lastViewedProjectId)}
           onSaved={() => {
             fetchProjects();
           }}
@@ -429,7 +447,10 @@ export default function App() {
       {diagnosticsProject && (
         <DiagnosticsModal
           project={diagnosticsProject}
-          onClose={handleCloseModal}
+          onClose={() => handleCloseModal()}
+          onNavigateHome={() => navigateTo('')}
+          onNavigateBack={lastViewedProjectId ? () => navigateTo(`project=${lastViewedProjectId}`) : undefined}
+          hasPreviousProject={Boolean(lastViewedProjectId)}
           onRefreshProject={fetchProjects}
         />
       )}
@@ -437,8 +458,11 @@ export default function App() {
       {isUploadOpen && (
         <AdminUploadModal
           projects={projects}
-          defaultProjectId={selectedProjectId || undefined}
-          onClose={handleCloseModal}
+          defaultProjectId={lastViewedProjectId || selectedProjectId || undefined}
+          onClose={() => handleCloseModal()}
+          onNavigateHome={() => navigateTo('')}
+          onNavigateBack={lastViewedProjectId ? () => navigateTo(`project=${lastViewedProjectId}`) : undefined}
+          hasPreviousProject={Boolean(lastViewedProjectId)}
           onUploadSuccess={() => {
             fetchProjects();
           }}
@@ -446,7 +470,10 @@ export default function App() {
       )}
 
       {isSetupGuideOpen && (
-        <SetupGuideModal onClose={handleCloseModal} />
+        <SetupGuideModal
+          onClose={() => handleCloseModal()}
+          onNavigateHome={() => navigateTo('')}
+        />
       )}
     </div>
   );

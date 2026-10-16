@@ -12,11 +12,15 @@ import {
   Loader2,
 } from 'lucide-react';
 import type { SupabaseProjectSummary } from '../types/dashboard';
+import { uploadAudioFile } from '../services/dashboardService';
 
 interface AdminUploadModalProps {
   projects: SupabaseProjectSummary[];
   defaultProjectId?: string;
   onClose: () => void;
+  onNavigateHome?: () => void;
+  onNavigateBack?: () => void;
+  hasPreviousProject?: boolean;
   onUploadSuccess: () => void;
 }
 
@@ -24,6 +28,9 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
   projects,
   defaultProjectId,
   onClose,
+  onNavigateHome,
+  onNavigateBack,
+  hasPreviousProject = false,
   onUploadSuccess,
 }) => {
   const [selectedProjectId, setSelectedProjectId] = useState<string>(
@@ -45,6 +52,22 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
+
+  const handleReturnBack = () => {
+    if (onNavigateBack) {
+      onNavigateBack();
+    } else {
+      onClose();
+    }
+  };
+
+  const handleReturnHome = () => {
+    if (onNavigateHome) {
+      onNavigateHome();
+    } else {
+      onClose();
+    }
+  };
 
   // Support Escape key to return
   useEffect(() => {
@@ -109,21 +132,17 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
 
     try {
       setUploadProgress(50);
-      const res = await fetch(`/api/projects/${selectedProjectId}/upload`, {
-        method: 'POST',
-        body: formData,
+      const res = await uploadAudioFile(selectedProjectId, file, {
+        title: title.trim(),
+        artist: artist.trim() || 'Unknown Artist',
+        album: album.trim(),
+        genre: genre.trim(),
+        duration: duration.trim(),
       });
-
-      setUploadProgress(85);
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Upload failed');
-      }
 
       setUploadProgress(100);
       setStatusMessage(`Upload succeeded! Stored in '${selectedProject?.storageBucket}'`);
-      setUploadedSong(data.song);
+      setUploadedSong(res.song);
       onUploadSuccess();
     } catch (err: any) {
       setErrorMessage(err.message || 'An error occurred during upload');
@@ -150,32 +169,67 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm sm:p-3 md:p-6 overflow-hidden safe-top safe-bottom">
-      <div className="relative w-full max-w-lg h-full sm:h-auto sm:max-h-[90dvh] flex flex-col rounded-none sm:rounded-2xl border-0 sm:border border-neutral-800 bg-neutral-950 shadow-2xl text-neutral-100 overflow-hidden">
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm sm:p-3 md:p-6 overflow-y-auto safe-top safe-bottom p-0"
+    >
+      <div className="relative w-full max-w-lg h-full sm:h-auto sm:max-h-[90dvh] flex flex-col min-h-0 rounded-none sm:rounded-2xl border-0 sm:border border-neutral-800 bg-neutral-950 shadow-2xl text-neutral-100 overflow-hidden">
         
         {/* Sticky Header Bar with Prominent Back Button */}
         <div className="shrink-0 flex items-center justify-between border-b border-neutral-800/80 px-3 sm:px-6 py-3 bg-neutral-900/80 backdrop-blur-md">
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex items-center gap-1.5 text-neutral-300 hover:text-white text-xs font-medium py-1.5 px-2.5 -ml-2 rounded-lg hover:bg-neutral-800/80 transition-colors min-h-[44px] focus:outline-none focus:ring-1 focus:ring-neutral-700"
-              title="Return to Dashboard (or press Esc)"
-              aria-label="Back to dashboard"
-            >
-              <ArrowLeft className="h-4 w-4 text-neutral-400 group-hover:text-white" />
-              <span>Back to Dashboard</span>
-            </button>
+            {hasPreviousProject ? (
+              <button
+                type="button"
+                onClick={handleReturnBack}
+                className="flex items-center gap-1.5 text-neutral-300 hover:text-white text-xs font-semibold py-2 px-3 rounded-lg hover:bg-neutral-800 transition-colors -ml-1 min-h-[44px] focus:outline-none focus:ring-1 focus:ring-neutral-700 cursor-pointer"
+                title={`Return to ${selectedProject?.name || 'Project'}`}
+                aria-label="Back to project"
+              >
+                <ArrowLeft className="h-4 w-4 text-neutral-400 group-hover:text-white shrink-0" />
+                <span className="truncate max-w-[130px] sm:max-w-none">
+                  Back to {selectedProject?.name || 'Project'}
+                </span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleReturnHome}
+                className="flex items-center gap-1.5 text-neutral-300 hover:text-white text-xs font-semibold py-2 px-3 rounded-lg hover:bg-neutral-800 transition-colors -ml-1 min-h-[44px] focus:outline-none focus:ring-1 focus:ring-neutral-700 cursor-pointer"
+                title="Return to Dashboard (or press Esc)"
+                aria-label="Back to dashboard"
+              >
+                <ArrowLeft className="h-4 w-4 text-neutral-400 group-hover:text-white shrink-0" />
+                <span>Back to Dashboard</span>
+              </button>
+            )}
+
             <div className="h-4 w-px bg-neutral-800 hidden xs:block" />
-            <div className="hidden xs:block">
+            <div className="hidden xs:flex items-center gap-1.5 text-xs text-neutral-400">
+              {hasPreviousProject && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleReturnHome}
+                    className="hover:text-white transition-colors cursor-pointer"
+                  >
+                    Dashboard
+                  </button>
+                  <span className="text-neutral-600">/</span>
+                </>
+              )}
               <h3 className="text-sm font-semibold text-white">Admin Upload</h3>
             </div>
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => onClose()}
             aria-label="Close dialog"
-            className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
+            className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
           >
             <X className="h-4 w-4" />
           </button>
@@ -183,7 +237,7 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
 
         {/* Scrollable Form Body */}
         <form onSubmit={handleUpload} className="flex-1 flex flex-col min-h-0 overflow-hidden">
-          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 touch-scroll pb-6">
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-4 touch-scroll pb-6">
           {/* Destination Project Selector (Responsive 1-col on mobile, 3-col on sm) */}
           <div>
             <label className="block text-xs font-medium text-neutral-300">
@@ -348,21 +402,32 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
           </div>
 
           {/* Sticky Bottom Actions Bar */}
-          <div className="shrink-0 flex flex-col xs:flex-row items-stretch xs:items-center justify-between border-t border-neutral-800/80 p-3 sm:px-6 sm:py-3.5 bg-neutral-950/95 gap-2.5 safe-bottom">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex items-center justify-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900 px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800 transition-colors min-h-[44px]"
-            >
-              <ArrowLeft className="h-4 w-4 text-neutral-400" />
-              <span>Back to Dashboard</span>
-            </button>
+          <div className="shrink-0 flex flex-col sm:flex-row items-stretch sm:items-center justify-between border-t border-neutral-800/80 p-3 sm:px-6 sm:py-3.5 bg-neutral-950/95 gap-2.5 safe-bottom">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleReturnHome}
+                className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900 px-3.5 py-2.5 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800 transition-colors min-h-[44px] cursor-pointer"
+              >
+                <ArrowLeft className="h-4 w-4 text-neutral-400" />
+                <span>Back to Dashboard</span>
+              </button>
+              {hasPreviousProject && (
+                <button
+                  type="button"
+                  onClick={handleReturnBack}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900/60 px-3.5 py-2.5 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800 transition-colors min-h-[44px] cursor-pointer"
+                >
+                  <span>Back to {selectedProject?.name || 'Project'}</span>
+                </button>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={handleReset}
                 disabled={isUploading}
-                className="flex items-center justify-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-xs font-medium text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors disabled:opacity-50 min-h-[44px]"
+                className="flex items-center justify-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-xs font-medium text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors disabled:opacity-50 min-h-[44px] cursor-pointer"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
                 <span>Reset</span>
@@ -370,7 +435,7 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
               <button
                 type="submit"
                 disabled={isUploading || !file}
-                className="flex-1 xs:flex-none flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-2 text-xs font-semibold text-neutral-950 hover:bg-neutral-200 transition-colors disabled:opacity-40 min-h-[44px]"
+                className="flex-1 sm:flex-none flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-2.5 text-xs font-semibold text-neutral-950 hover:bg-neutral-200 transition-colors disabled:opacity-40 min-h-[44px] cursor-pointer shadow-sm active:scale-95"
               >
                 {isUploading ? (
                   <>

@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 import type { ProjectDetails, AudioFileItem, SongMetadataItem } from '../types/dashboard';
 import { StorageMeter } from './StorageMeter';
+import { fetchProjectDetails } from '../services/dashboardService';
+import { resolveProjectLogo } from '../assets/logos';
 
 interface ProjectDetailsModalProps {
   projectId: string;
@@ -52,11 +54,7 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
     try {
       setRefreshing(true);
       setError(null);
-      const res = await fetch(`/api/projects/${projectId}`);
-      if (!res.ok) {
-        throw new Error(`Failed to load project details (HTTP ${res.status})`);
-      }
-      const data = await res.json();
+      const data = await fetchProjectDetails(projectId);
       setDetails(data);
     } catch (err: any) {
       setError(err.message || 'Error loading project');
@@ -151,15 +149,23 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm sm:p-3 md:p-6 overflow-hidden safe-top safe-bottom">
-      <div className="relative w-full max-w-5xl h-full sm:h-auto sm:max-h-[92dvh] flex flex-col rounded-none sm:rounded-2xl border-0 sm:border border-neutral-800 bg-neutral-950 text-neutral-100 shadow-2xl overflow-hidden">
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm sm:p-3 md:p-6 overflow-y-auto safe-top safe-bottom p-0 sm:p-3"
+    >
+      <div className="relative w-full max-w-5xl h-full sm:h-auto sm:max-h-[92dvh] flex flex-col min-h-0 rounded-none sm:rounded-2xl border-0 sm:border border-neutral-800 bg-neutral-950 text-neutral-100 shadow-2xl overflow-hidden">
         
         {/* Navigation Breadcrumb & Back Bar */}
         <div className="shrink-0 border-b border-neutral-800/80 bg-neutral-900/80 backdrop-blur-md px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2 sm:gap-3">
           <div className="flex items-center gap-2 text-xs">
             <button
+              type="button"
               onClick={onClose}
-              className="flex items-center gap-1.5 text-neutral-300 hover:text-white font-medium py-1.5 px-2.5 -ml-2 rounded-lg hover:bg-neutral-800/80 transition-colors min-h-[44px] focus:outline-none focus:ring-1 focus:ring-neutral-700"
+              className="flex items-center gap-1.5 text-neutral-300 hover:text-white font-medium py-1.5 px-2.5 -ml-2 rounded-lg hover:bg-neutral-800/80 transition-colors min-h-[44px] focus:outline-none focus:ring-1 focus:ring-neutral-700 cursor-pointer"
               title="Return to Dashboard (or press Esc)"
               aria-label="Back to dashboard"
             >
@@ -209,7 +215,7 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
               <div className="relative h-12 w-12 sm:h-14 sm:w-14 shrink-0 overflow-hidden rounded-xl border border-neutral-800 bg-neutral-900">
                 {details.logo ? (
                   <img
-                    src={details.logo}
+                    src={resolveProjectLogo(details.id, details.logo)}
                     alt={details.name}
                     referrerPolicy="no-referrer"
                     className="h-full w-full object-cover"
@@ -687,16 +693,18 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
         {/* Sticky Mobile Bottom Bar with Visible Back to Dashboard Button */}
         <div className="sm:hidden shrink-0 border-t border-neutral-800/90 bg-neutral-950/95 p-3 flex items-center justify-between gap-3 safe-bottom">
           <button
+            type="button"
             onClick={onClose}
-            className="flex items-center gap-2 text-xs font-medium text-neutral-300 bg-neutral-900 border border-neutral-700/80 px-3.5 py-2.5 rounded-lg hover:bg-neutral-800 transition-colors min-h-[44px]"
+            className="flex items-center gap-2 text-xs font-medium text-neutral-300 bg-neutral-900 border border-neutral-700/80 px-3.5 py-2.5 rounded-lg hover:bg-neutral-800 transition-colors min-h-[44px] cursor-pointer"
           >
             <ArrowLeft className="h-4 w-4" />
             <span>Back to Dashboard</span>
           </button>
           {isAdminMode && (
             <button
+              type="button"
               onClick={onOpenUpload}
-              className="flex items-center gap-1.5 text-xs font-semibold text-neutral-950 bg-white px-3.5 py-2.5 rounded-lg hover:bg-neutral-200 transition-colors min-h-[44px]"
+              className="flex items-center gap-1.5 text-xs font-semibold text-neutral-950 bg-white px-3.5 py-2.5 rounded-lg hover:bg-neutral-200 transition-colors min-h-[44px] cursor-pointer"
             >
               <Music className="h-3.5 w-3.5" />
               <span>Upload</span>

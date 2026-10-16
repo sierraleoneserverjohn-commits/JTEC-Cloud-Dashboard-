@@ -13,16 +13,23 @@ import {
   Sparkles,
 } from 'lucide-react';
 import type { SupabaseProjectSummary, ConnectionTestResult, DiagnosticCheck } from '../types/dashboard';
+import { testProjectConnection } from '../services/dashboardService';
 
 interface DiagnosticsModalProps {
   project: SupabaseProjectSummary;
   onClose: () => void;
+  onNavigateHome?: () => void;
+  onNavigateBack?: () => void;
+  hasPreviousProject?: boolean;
   onRefreshProject: () => void;
 }
 
 export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
   project,
   onClose,
+  onNavigateHome,
+  onNavigateBack,
+  hasPreviousProject = false,
   onRefreshProject,
 }) => {
   const [activeMode, setActiveMode] = useState<'health' | 'phase1'>('health');
@@ -35,6 +42,22 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
   const [isRunningPhase1, setIsRunningPhase1] = useState(false);
   const [phase1Summary, setPhase1Summary] = useState<string | null>(null);
   const [phase1Error, setPhase1Error] = useState<string | null>(null);
+
+  const handleReturnBack = () => {
+    if (onNavigateBack) {
+      onNavigateBack();
+    } else {
+      onClose();
+    }
+  };
+
+  const handleReturnHome = () => {
+    if (onNavigateHome) {
+      onNavigateHome();
+    } else {
+      onClose();
+    }
+  };
 
   // Support Escape key to return
   useEffect(() => {
@@ -50,10 +73,7 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
   const runHealthTest = async () => {
     setIsTestingHealth(true);
     try {
-      const res = await fetch(`/api/projects/${project.id}/test-connection`, {
-        method: 'POST',
-      });
-      const data = await res.json();
+      const data = await testProjectConnection(project.id);
       setHealthResult(data);
       onRefreshProject();
     } catch (err: any) {
@@ -106,32 +126,67 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
   }, [project.id]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm sm:p-3 md:p-6 overflow-hidden safe-top safe-bottom">
-      <div className="relative w-full max-w-2xl h-full sm:h-auto sm:max-h-[90dvh] flex flex-col rounded-none sm:rounded-2xl border-0 sm:border border-neutral-800 bg-neutral-950 shadow-2xl text-neutral-100 overflow-hidden">
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm sm:p-3 md:p-6 overflow-y-auto safe-top safe-bottom p-0"
+    >
+      <div className="relative w-full max-w-2xl h-full sm:h-auto sm:max-h-[90dvh] flex flex-col min-h-0 rounded-none sm:rounded-2xl border-0 sm:border border-neutral-800 bg-neutral-950 shadow-2xl text-neutral-100 overflow-hidden">
         
         {/* Sticky Header Bar with Prominent Back Button */}
         <div className="shrink-0 flex items-center justify-between border-b border-neutral-800/80 px-3 sm:px-6 py-3 bg-neutral-900/80 backdrop-blur-md">
           <div className="flex items-center gap-2">
-            <button
-              onClick={onClose}
-              className="flex items-center gap-1.5 text-neutral-300 hover:text-white text-xs font-medium py-1.5 px-2.5 -ml-2 rounded-lg hover:bg-neutral-800/80 transition-colors min-h-[44px] focus:outline-none focus:ring-1 focus:ring-neutral-700"
-              title="Return to Dashboard (or press Esc)"
-              aria-label="Back to dashboard"
-            >
-              <ArrowLeft className="h-4 w-4 text-neutral-400 group-hover:text-white" />
-              <span>Back to Dashboard</span>
-            </button>
+            {hasPreviousProject ? (
+              <button
+                type="button"
+                onClick={handleReturnBack}
+                className="flex items-center gap-1.5 text-neutral-300 hover:text-white text-xs font-semibold py-2 px-3 rounded-lg hover:bg-neutral-800 transition-colors -ml-1 min-h-[44px] focus:outline-none focus:ring-1 focus:ring-neutral-700 cursor-pointer"
+                title={`Return to ${project.name}`}
+                aria-label={`Back to ${project.name}`}
+              >
+                <ArrowLeft className="h-4 w-4 text-neutral-400 group-hover:text-white shrink-0" />
+                <span className="truncate max-w-[130px] sm:max-w-none">Back to {project.name}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleReturnHome}
+                className="flex items-center gap-1.5 text-neutral-300 hover:text-white text-xs font-semibold py-2 px-3 rounded-lg hover:bg-neutral-800 transition-colors -ml-1 min-h-[44px] focus:outline-none focus:ring-1 focus:ring-neutral-700 cursor-pointer"
+                title="Return to Dashboard (or press Esc)"
+                aria-label="Back to dashboard"
+              >
+                <ArrowLeft className="h-4 w-4 text-neutral-400 group-hover:text-white shrink-0" />
+                <span>Back to Dashboard</span>
+              </button>
+            )}
+
             <div className="h-4 w-px bg-neutral-800 hidden xs:block" />
-            <div className="hidden xs:block">
+            <div className="hidden xs:flex items-center gap-1.5 text-xs text-neutral-400">
+              {hasPreviousProject && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleReturnHome}
+                    className="hover:text-white transition-colors cursor-pointer"
+                  >
+                    Dashboard
+                  </button>
+                  <span className="text-neutral-600">/</span>
+                </>
+              )}
               <h3 className="text-sm font-semibold text-white truncate max-w-[160px] sm:max-w-xs">
                 {project.name} Diagnostics
               </h3>
             </div>
           </div>
           <button
-            onClick={onClose}
+            type="button"
+            onClick={() => onClose()}
             aria-label="Close dialog"
-            className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
+            className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
           >
             <X className="h-4 w-4" />
           </button>
@@ -163,7 +218,7 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
         </div>
 
         {/* Scrollable Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 touch-scroll">
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-4 touch-scroll">
           {/* Tab 1: Health Diagnostic Checks */}
           {activeMode === 'health' && (
             <div className="space-y-4">
@@ -333,22 +388,33 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
         </div>
 
         {/* Sticky Bottom Actions Bar */}
-        <div className="shrink-0 flex items-center justify-between border-t border-neutral-800/80 p-3 sm:px-6 sm:py-3.5 bg-neutral-950/95 gap-3 safe-bottom">
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex items-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900 px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800 transition-colors min-h-[44px]"
-          >
-            <ArrowLeft className="h-4 w-4 text-neutral-400" />
-            <span>Back to Dashboard</span>
-          </button>
+        <div className="shrink-0 flex flex-col sm:flex-row items-stretch sm:items-center justify-between border-t border-neutral-800/80 p-3 sm:px-6 sm:py-3.5 bg-neutral-950/95 gap-3 safe-bottom">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleReturnHome}
+              className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900 px-3.5 py-2.5 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800 transition-colors min-h-[44px] cursor-pointer"
+            >
+              <ArrowLeft className="h-4 w-4 text-neutral-400" />
+              <span>Back to Dashboard</span>
+            </button>
+            {hasPreviousProject && (
+              <button
+                type="button"
+                onClick={handleReturnBack}
+                className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900/60 px-3.5 py-2.5 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800 transition-colors min-h-[44px] cursor-pointer"
+              >
+                <span>Back to {project.name}</span>
+              </button>
+            )}
+          </div>
 
           {activeMode === 'health' ? (
             <button
               type="button"
               onClick={runHealthTest}
               disabled={isTestingHealth}
-              className="flex items-center gap-1.5 rounded-lg bg-neutral-100 px-3.5 py-2 text-xs font-semibold text-neutral-950 hover:bg-white transition-colors disabled:opacity-50 min-h-[44px]"
+              className="flex items-center justify-center gap-1.5 rounded-lg bg-neutral-100 px-4 py-2.5 text-xs font-semibold text-neutral-950 hover:bg-white transition-colors disabled:opacity-50 min-h-[44px] cursor-pointer shadow-sm active:scale-95"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${isTestingHealth ? 'animate-spin' : ''}`} />
               <span>Rerun Health Test</span>
@@ -358,7 +424,7 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
               type="button"
               onClick={runPhase1Verification}
               disabled={isRunningPhase1}
-              className="flex items-center gap-1.5 rounded-lg bg-neutral-100 px-3.5 py-2 text-xs font-semibold text-neutral-950 hover:bg-white transition-colors disabled:opacity-50 min-h-[44px]"
+              className="flex items-center justify-center gap-1.5 rounded-lg bg-neutral-100 px-4 py-2.5 text-xs font-semibold text-neutral-950 hover:bg-white transition-colors disabled:opacity-50 min-h-[44px] cursor-pointer shadow-sm active:scale-95"
             >
               {isRunningPhase1 ? (
                 <>

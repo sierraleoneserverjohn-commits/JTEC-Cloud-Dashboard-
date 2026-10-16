@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { SupabaseProjectSummary } from '../types/dashboard';
 import { StorageMeter } from './StorageMeter';
+import { resolveProjectLogo } from '../assets/logos';
 
 interface ProjectCardProps {
   project: SupabaseProjectSummary;
@@ -44,6 +45,8 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
         : `${project.storageUsedMB} MB`
       : null;
 
+  const logoSrc = resolveProjectLogo(project.id, project.logo);
+
   return (
     <div
       onClick={() => onSelect(project)}
@@ -55,9 +58,9 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
           <div className="flex items-center gap-3">
             {/* Project Logo Image with styled fallback */}
             <div className="relative h-12 w-12 sm:h-14 sm:w-14 shrink-0 overflow-hidden rounded-lg border border-neutral-800 bg-neutral-950">
-              {project.logo ? (
+              {logoSrc ? (
                 <img
-                  src={project.logo}
+                  src={logoSrc}
                   alt={`${project.name} logo`}
                   referrerPolicy="no-referrer"
                   className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
@@ -83,13 +86,14 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
 
           {/* Quick Config Button */}
           <button
+            type="button"
             onClick={(e) => {
               e.stopPropagation();
               onOpenConfig(project);
             }}
             title="Configure Project Supabase Keys & Bucket"
             aria-label={`Configure ${project.name} project credentials`}
-            className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
+            className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0 cursor-pointer"
           >
             <Settings2 className="h-4 w-4" />
           </button>
@@ -202,7 +206,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
                 onTestConnection(project);
               }}
               aria-label={`Test connection for ${project.name}`}
-              className="rounded-lg px-2.5 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors border border-neutral-800 bg-neutral-950/60 min-h-[36px] flex items-center justify-center"
+              className="rounded-lg px-2.5 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors border border-neutral-800 bg-neutral-950/60 min-h-[36px] flex items-center justify-center cursor-pointer"
             >
               Test
             </button>
