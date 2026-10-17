@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import type { ProjectDetails, AudioFileItem, SongMetadataItem } from '../types/dashboard';
 import { StorageMeter } from './StorageMeter';
-import { fetchProjectDetails } from '../services/dashboardService';
+import { fetchProjectDetails, deleteAudioFile } from '../services/dashboardService';
 import { resolveProjectLogo } from '../assets/logos';
 
 interface ProjectDetailsModalProps {
@@ -104,17 +104,10 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
     if (!confirm(`Are you sure you want to remove '${fileName}' from storage and database?`)) return;
 
     try {
-      const res = await fetch(`/api/projects/${projectId}/files/${encodeURIComponent(fileName)}`, {
-        method: 'DELETE',
-      });
-      if (res.ok) {
-        fetchDetails();
-      } else {
-        const data = await res.json();
-        alert(data.error || 'Delete failed');
-      }
+      await deleteAudioFile(projectId, fileName);
+      fetchDetails();
     } catch (e: any) {
-      alert(e.message);
+      alert(e.message || 'Delete failed');
     }
   };
 

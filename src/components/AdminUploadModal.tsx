@@ -563,7 +563,7 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
           <input
             ref={coverInputRef}
             type="file"
-            accept="image/jpeg,image/png,image/webp,image/jpg"
+            accept="image/*,image/jpeg,image/png,image/webp,image/jpg"
             onChange={handleCustomCoverChange}
             className="hidden"
           />

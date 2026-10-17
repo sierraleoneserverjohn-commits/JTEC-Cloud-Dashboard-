@@ -1,0 +1,35 @@
+{
+  "project": {
+    "id": "nasheed",
+    "name": "NASHEED",
+    "category": "Nasheed & Spiritual Audio",
+    "logo": "assets/images/logo_nasheed_1792083522907.jpg",
+    "url": "",
+    "anonKey": "",
+    "hasServiceRoleKey": false,
+    "hasManagementToken": false,
+    "projectRef": "",
+    "storageBucket": "nasheed-audio",
+    "tableName": "songs",
+    "storageQuotaBytes": 1073741824,
+    "status": "not_configured",
+    "statusMessage": "Awaiting Supabase credentials",
+    "audioFileCount": null,
+    "audioTotalBytes": null,
+    "storageUsedMB": null,
+    "storageUsedGB": null,
+    "percentUsed": null,
+    "remainingBytes": null,
+    "lastRefreshedAt": null,
+    "lastTestedAt": null,
+    "error": null
+  },
+  "files": [],
+  "songs": [],
+  "recentUploads": [],
+  "telemetry": {
+    "bucketAccessible": false,
+    "tableAccessible": false,
+    "latencyMs": 0
+  }
+}

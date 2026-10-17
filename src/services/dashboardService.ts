@@ -908,6 +908,48 @@ export async function uploadAudioFile(
 }
 
 /**
+ * Universal Audio File Deleter (handles both backend proxy and direct client-side Supabase for Android APK & GitHub Pages)
+ */
+export async function deleteAudioFile(projectId: string, fileName: string): Promise<boolean> {
+  // Try local backend proxy first
+  try {
+    const res = await fetch(`/api/projects/${projectId}/files/${encodeURIComponent(fileName)}`, {
+      method: 'DELETE',
+    });
+    if (res.ok) return true;
+  } catch {
+    // Backend not running (Android APK / GitHub Pages static mode)
+  }
+
+  const configs = getStoredConfigs();
+  const config = configs.find((p) => p.id === projectId) || configs[0];
+  if (!config.url || !config.anonKey) {
+    throw new Error('Supabase credentials not configured for this project.');
+  }
+
+  const client = getBrowserSupabaseClient(projectId, config.url, config.anonKey);
+  if (!client) {
+    throw new Error('Could not initialize Supabase client.');
+  }
+
+  // 1. Remove from storage bucket
+  const bucket = config.storageBucket || 'nasheed-audio';
+  const { error: storageErr } = await client.storage.from(bucket).remove([fileName]);
+  if (storageErr) {
+    console.warn('Storage delete warning:', storageErr.message);
+  }
+
+  // 2. Remove matching database row
+  const table = config.tableName || 'songs';
+  const { error: dbErr } = await client.from(table).delete().eq('file_name', fileName);
+  if (dbErr) {
+    console.warn('Database delete warning:', dbErr.message);
+  }
+
+  return true;
+}
+
+/**
  * Universal Phase 1 Self-Test (client-side execution for GitHub Pages)
  */
 export async function runSelfTestClientSide(projectId: string): Promise<{
