@@ -16,6 +16,10 @@ import {
   LogIn,
   LogOut,
   Key,
+  Image as ImageIcon,
+  ImagePlus,
+  ImageOff,
+  Sparkles,
 } from 'lucide-react';
 import type { SupabaseProjectSummary } from '../types/dashboard';
 import {
@@ -24,6 +28,17 @@ import {
   adminSignIn,
   adminSignOut,
 } from '../services/dashboardService';
+import { extractAudioArtworkAndMetadata } from '../utils/audioArtworkExtractor';
+import { resolveProjectLogo } from '../assets/logos';
+
+interface CoverState {
+  status: 'idle' | 'detecting' | 'found' | 'none' | 'custom';
+  source: 'embedded' | 'custom' | 'none';
+  previewUrl: string | null;
+  file: File | null;
+  mimeType: string | null;
+  fileName?: string;
+}
 
 interface AdminUploadModalProps {
   projects: SupabaseProjectSummary[];
@@ -54,6 +69,15 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
   const [genre, setGenre] = useState('');
   const [duration, setDuration] = useState('');
 
+  // Artwork detection & custom cover state (Upgraded for NASHEED)
+  const [coverState, setCoverState] = useState<CoverState>({
+    status: 'idle',
+    source: 'none',
+    previewUrl: null,
+    file: null,
+    mimeType: null,
+  });
+
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -70,6 +94,7 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
   const [showAuthForm, setShowAuthForm] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const coverInputRef = useRef<HTMLInputElement>(null);
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
 
@@ -148,11 +173,11 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const selected = e.target.files[0];
       setFile(selected);
-      // Auto-extract track title from filename
+      // Auto-extract track title from filename as initial fallback
       const cleanName = selected.name.replace(/\.[^/.]+$/, '');
       if (!title) {
         setTitle(cleanName.replace(/[-_]/g, ' '));
@@ -171,6 +196,88 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
           setDuration(`${mins}:${secs < 10 ? '0' : ''}${secs}`);
         }
       };
+
+      // Detect embedded album artwork (automatic detection for NASHEED)
+      setCoverState({
+        status: 'detecting',
+        source: 'none',
+        previewUrl: null,
+        file: null,
+        mimeType: null,
+      });
+
+      try {
+        const metadata = await extractAudioArtworkAndMetadata(selected);
+        if (metadata.hasEmbeddedCover && metadata.coverPreviewUrl && metadata.coverFile) {
+          setCoverState({
+            status: 'found',
+            source: 'embedded',
+            previewUrl: metadata.coverPreviewUrl,
+            file: metadata.coverFile,
+            mimeType: metadata.mimeType,
+            fileName: metadata.coverFile.name,
+          });
+          // Auto-fill tags from ID3 metadata if available
+          if (metadata.extractedTitle) setTitle(metadata.extractedTitle);
+          if (metadata.extractedArtist) setArtist(metadata.extractedArtist);
+          if (metadata.extractedAlbum) setAlbum(metadata.extractedAlbum);
+          if (metadata.extractedGenre) setGenre(metadata.extractedGenre);
+        } else {
+          setCoverState({
+            status: 'none',
+            source: 'none',
+            previewUrl: null,
+            file: null,
+            mimeType: null,
+          });
+          if (metadata.extractedTitle) setTitle(metadata.extractedTitle);
+          if (metadata.extractedArtist) setArtist(metadata.extractedArtist);
+          if (metadata.extractedAlbum) setAlbum(metadata.extractedAlbum);
+          if (metadata.extractedGenre) setGenre(metadata.extractedGenre);
+        }
+      } catch (extractErr) {
+        console.warn('Artwork extraction notice:', extractErr);
+        setCoverState({
+          status: 'none',
+          source: 'none',
+          previewUrl: null,
+          file: null,
+          mimeType: null,
+        });
+      }
+    }
+  };
+
+  const handleCustomCoverChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const selectedImg = e.target.files[0];
+      if (!selectedImg.type.startsWith('image/')) {
+        setErrorMessage('Please select a valid image file (JPG, JPEG, PNG, or WebP).');
+        return;
+      }
+      const preview = URL.createObjectURL(selectedImg);
+      setCoverState({
+        status: 'custom',
+        source: 'custom',
+        previewUrl: preview,
+        file: selectedImg,
+        mimeType: selectedImg.type,
+        fileName: selectedImg.name,
+      });
+      setErrorMessage(null);
+    }
+  };
+
+  const handleRemoveCover = () => {
+    setCoverState({
+      status: 'none',
+      source: 'none',
+      previewUrl: null,
+      file: null,
+      mimeType: null,
+    });
+    if (coverInputRef.current) {
+      coverInputRef.current.value = '';
     }
   };
 
@@ -190,14 +297,6 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
     setErrorMessage(null);
     setStatusMessage('Transmitting audio package to Supabase...');
 
-    const formData = new FormData();
-    formData.append('audioFile', file);
-    formData.append('title', title.trim());
-    formData.append('artist', artist.trim() || 'Unknown Artist');
-    formData.append('album', album.trim());
-    formData.append('genre', genre.trim());
-    formData.append('duration', duration.trim());
-
     try {
       setUploadProgress(50);
       const res = await uploadAudioFile(selectedProjectId, file, {
@@ -206,6 +305,7 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
         album: album.trim(),
         genre: genre.trim(),
         duration: duration.trim(),
+        coverFile: coverState.file,
       });
 
       setUploadProgress(100);
@@ -231,8 +331,18 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
     setStatusMessage(null);
     setUploadedSong(null);
     setUploadProgress(0);
+    setCoverState({
+      status: 'idle',
+      source: 'none',
+      previewUrl: null,
+      file: null,
+      mimeType: null,
+    });
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+    if (coverInputRef.current) {
+      coverInputRef.current.value = '';
     }
   };
 
@@ -449,6 +559,170 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
             </div>
           </div>
 
+          {/* Hidden native image input for custom cover selection (opens gallery/local files) */}
+          <input
+            ref={coverInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/jpg"
+            onChange={handleCustomCoverChange}
+            className="hidden"
+          />
+
+          {/* Embedded Artwork Detection & Cover Status Card (NASHEED Upgraded Flow) */}
+          {file && (
+            <div className="space-y-2">
+              {coverState.status === 'detecting' && (
+                <div className="rounded-xl border border-neutral-800 bg-neutral-900/70 p-3.5 flex items-center gap-3">
+                  <Loader2 className="h-5 w-5 animate-spin text-neutral-400 shrink-0" />
+                  <div>
+                    <p className="text-xs font-semibold text-white">Detecting Album Artwork...</p>
+                    <p className="text-[11px] text-neutral-400">
+                      Scanning audio file for embedded ID3v2 APIC, FLAC picture, or MP4 cover art
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Case 1: Embedded Cover Detected */}
+              {coverState.status === 'found' && (
+                <div className="rounded-xl border border-emerald-900/70 bg-emerald-950/25 p-3.5 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-950 border border-emerald-700/80 text-emerald-300">
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                        <span>Cover Found</span>
+                      </span>
+                      <span className="text-xs font-medium text-neutral-300">
+                        Embedded Album Artwork
+                      </span>
+                    </div>
+                    <span className="text-[11px] font-mono text-emerald-400">Kept as Track Cover</span>
+                  </div>
+
+                  <div className="flex items-center gap-3.5">
+                    <div className="relative h-16 w-16 sm:h-20 sm:w-20 shrink-0 overflow-hidden rounded-lg border border-emerald-800/80 bg-neutral-900 shadow-inner">
+                      {coverState.previewUrl ? (
+                        <img
+                          src={coverState.previewUrl}
+                          alt="Embedded cover preview"
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <ImageIcon className="h-8 w-8 text-neutral-500 m-auto" />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <p className="text-xs font-semibold text-white truncate">
+                        {coverState.fileName || 'Embedded Artwork'}
+                      </p>
+                      <p className="text-[11px] text-neutral-400">
+                        MIME: <span className="font-mono text-neutral-300">{coverState.mimeType || 'image/jpeg'}</span>
+                      </p>
+                      <p className="text-[11px] text-emerald-300/90 leading-tight">
+                        Embedded artwork is active and will be uploaded to Supabase Storage with this song. No need to upload another one.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Case 2: No Cover Detected -> Show "No Cover Found" & prominent "Add Cover" button */}
+              {coverState.status === 'none' && (
+                <div className="rounded-xl border border-amber-900/60 bg-amber-950/25 p-3.5 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-950 border border-amber-700/80 text-amber-300">
+                        <ImageOff className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                        <span>No Cover Found</span>
+                      </span>
+                      <span className="text-xs font-medium text-neutral-300 hidden xs:inline">
+                        No Embedded Artwork
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => coverInputRef.current?.click()}
+                      className="flex items-center gap-1.5 rounded-lg border border-amber-600/70 bg-amber-900/50 hover:bg-amber-800/60 px-3 py-1.5 text-xs font-semibold text-amber-100 transition-colors cursor-pointer min-h-[36px] shadow-sm active:scale-95"
+                    >
+                      <ImagePlus className="h-3.5 w-3.5 text-amber-300" />
+                      <span>Add Cover</span>
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-dashed border-amber-800/70 bg-neutral-900/80 flex items-center justify-center">
+                      <ImageOff className="h-6 w-6 text-amber-500/70" />
+                    </div>
+                    <div className="text-[11px] text-neutral-300 leading-relaxed flex-1">
+                      <p className="text-neutral-200">
+                        No embedded artwork was detected in this audio file.
+                      </p>
+                      <p className="text-neutral-400 mt-0.5">
+                        Tap <strong className="text-amber-200 font-semibold">Add Cover</strong> to choose an image from your gallery/files, or continue without one to use the fallback artwork.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Case 3: Custom Cover Selected */}
+              {coverState.status === 'custom' && (
+                <div className="rounded-xl border border-sky-900/70 bg-sky-950/25 p-3.5 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-sky-950 border border-sky-700/80 text-sky-300">
+                        <CheckCircle2 className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                        <span>Custom Cover Attached</span>
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => coverInputRef.current?.click()}
+                        className="text-[11px] font-medium text-neutral-300 hover:text-white px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors cursor-pointer"
+                      >
+                        Change
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleRemoveCover}
+                        className="text-[11px] font-medium text-rose-400 hover:text-rose-300 px-2.5 py-1 rounded bg-rose-950/40 hover:bg-rose-900/50 transition-colors cursor-pointer"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3.5">
+                    <div className="relative h-16 w-16 sm:h-20 sm:w-20 shrink-0 overflow-hidden rounded-lg border border-sky-800/80 bg-neutral-900 shadow-inner">
+                      {coverState.previewUrl ? (
+                        <img
+                          src={coverState.previewUrl}
+                          alt="Custom cover preview"
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <ImageIcon className="h-8 w-8 text-neutral-500 m-auto" />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <p className="text-xs font-semibold text-white truncate">
+                        {coverState.fileName || coverState.file?.name}
+                      </p>
+                      <p className="text-[11px] text-neutral-400">
+                        Format: <span className="font-mono text-neutral-300">{coverState.mimeType}</span>
+                      </p>
+                      <p className="text-[11px] text-sky-300/90 leading-tight">
+                        Custom cover will be uploaded together with the song to Supabase Storage and saved as <code className="text-sky-200">songs.cover_url</code>.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Metadata Fields (Responsive 1-col on xs, 2-col on sm) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -506,6 +780,62 @@ export const AdminUploadModal: React.FC<AdminUploadModalProps> = ({
               />
             </div>
           </div>
+
+          {/* Pre-Upload Track Preview & Validation Card (Requirement 4) */}
+          {file && (
+            <div className="rounded-xl border border-neutral-800 bg-neutral-900/80 p-3.5 sm:p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-neutral-800/80 pb-2">
+                <h4 className="text-xs font-semibold text-neutral-200 flex items-center gap-1.5">
+                  <Sparkles className="h-3.5 w-3.5 text-neutral-400" />
+                  <span>Track Preview & Pre-Upload Validation</span>
+                </h4>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-neutral-800 text-neutral-300">
+                  Ready to Upload
+                </span>
+              </div>
+
+              <div className="flex items-start gap-3.5">
+                {/* Cover Preview or Fallback Artwork */}
+                <div className="relative h-16 w-16 sm:h-20 sm:w-20 shrink-0 overflow-hidden rounded-xl border border-neutral-700 bg-neutral-950 shadow-md">
+                  <img
+                    src={
+                      coverState.previewUrl ||
+                      resolveProjectLogo(selectedProjectId, selectedProject?.logo)
+                    }
+                    alt="Track cover preview"
+                    className="h-full w-full object-cover"
+                  />
+                  {!coverState.previewUrl && (
+                    <div className="absolute inset-x-0 bottom-0 bg-black/75 backdrop-blur-xs py-0.5 text-center">
+                      <span className="text-[9px] font-semibold text-amber-300">Fallback</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Song Title, Artist, Duration, Destination */}
+                <div className="min-w-0 flex-1 space-y-1">
+                  <p className="text-xs sm:text-sm font-bold text-white truncate">
+                    {title.trim() || file?.name || 'Untitled Track'}
+                  </p>
+                  <p className="text-xs text-neutral-300 truncate">
+                    {artist.trim() || 'Unknown Artist'} {album.trim() ? `· ${album.trim()}` : ''}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px] text-neutral-400">
+                    <span className="font-mono text-neutral-200">⏱️ {duration || 'Detecting...'}</span>
+                    <span>·</span>
+                    <span className="font-mono text-neutral-400">
+                      Bucket: {selectedProject?.storageBucket || 'nasheed-audio'}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-neutral-400 italic pt-0.5">
+                    {coverState.previewUrl
+                      ? 'Artwork verified. Audio & cover will be uploaded together.'
+                      : 'Missing cover will not block upload. Fallback artwork will be used.'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Progress / Status feedback */}
           {isUploading && (

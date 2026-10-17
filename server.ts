@@ -406,6 +406,7 @@ async function inspectProject(config: StoredProjectConfig): Promise<{
         file_size: row.file_size || row.size || undefined,
         storage_path: row.file_path || row.storage_path || undefined,
         public_url: row.audio_url || row.public_url || undefined,
+        cover_url: row.cover_url || row.image_url || undefined,
         created_at: row.created_at || new Date().toISOString(),
       }));
 
@@ -865,145 +866,180 @@ app.post('/api/projects/:id/config', (req, res) => {
 });
 
 // 5. Admin Upload Audio endpoint
-app.post('/api/projects/:id/upload', upload.single('audioFile'), async (req, res) => {
-  const configs = loadProjectConfigs();
-  const config = configs.find((p) => p.id === req.params.id);
+app.post(
+  '/api/projects/:id/upload',
+  upload.fields([
+    { name: 'audioFile', maxCount: 1 },
+    { name: 'coverFile', maxCount: 1 },
+  ]),
+  async (req, res) => {
+    const configs = loadProjectConfigs();
+    const config = configs.find((p) => p.id === req.params.id);
 
-  if (!config) {
-    return res.status(404).json({ error: `Project ${req.params.id} not found` });
-  }
+    if (!config) {
+      return res.status(404).json({ error: `Project ${req.params.id} not found` });
+    }
 
-  if (!config.url || (!config.anonKey && !config.serviceRoleKey)) {
-    return res.status(400).json({
-      error: `Project '${config.name}' is not configured with Supabase credentials.`,
-    });
-  }
-
-  const client = getSupabaseClient(config, req.headers.authorization as string | undefined);
-  if (!client) {
-    return res.status(500).json({ error: 'Supabase client could not be initialized' });
-  }
-
-  const file = req.file;
-  if (!file) {
-    return res.status(400).json({ error: 'No audio file provided in request' });
-  }
-
-  const title = (req.body.title || path.parse(file.originalname).name).trim();
-  const artist = (req.body.artist || 'Unknown Artist').trim();
-  const album = (req.body.album || '').trim();
-  const genre = (req.body.genre || '').trim();
-  const duration = req.body.duration ? parseFloat(req.body.duration) : null;
-
-  // Sanitize filename to prevent directory traversal
-  const sanitizedFilename = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const bucketName = config.storageBucket || 'songs';
-  const tableName = config.tableName || 'songs';
-
-  // 1. Check for duplicate file in bucket to prevent overwriting without consent
-  try {
-    const { data: existingFiles } = await client.storage.from(bucketName).list('', {
-      search: sanitizedFilename,
-    });
-
-    if (existingFiles && existingFiles.some((f) => f.name === sanitizedFilename)) {
-      const logEntry: UploadActivityLog = {
-        id: `upload-${Date.now()}`,
-        projectId: config.id,
-        fileName: sanitizedFilename,
-        fileSize: file.size,
-        title,
-        artist,
-        status: 'failed',
-        errorMessage: 'A file with this name already exists in the storage bucket.',
-        timestamp: new Date().toISOString(),
-      };
-      appendUploadLog(logEntry);
-      return res.status(409).json({
-        error: `Duplicate file detected: '${sanitizedFilename}' already exists in '${bucketName}'. Please rename the file before uploading.`,
+    if (!config.url || (!config.anonKey && !config.serviceRoleKey)) {
+      return res.status(400).json({
+        error: `Project '${config.name}' is not configured with Supabase credentials.`,
       });
     }
-  } catch (err) {
-    // If list check fails, log and continue
-    console.warn('Could not verify duplicate existence:', err);
-  }
 
-  // 2. Upload file to Supabase Storage
-  let storageUploadSuccess = false;
-  try {
-    const { data: uploadData, error: uploadErr } = await client.storage
-      .from(bucketName)
-      .upload(sanitizedFilename, file.buffer, {
-        contentType: file.mimetype || 'audio/mpeg',
-        upsert: false,
+    const client = getSupabaseClient(config, req.headers.authorization as string | undefined);
+    if (!client) {
+      return res.status(500).json({ error: 'Supabase client could not be initialized' });
+    }
+
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+    const file = files?.['audioFile']?.[0] || req.file;
+    const coverFile = files?.['coverFile']?.[0];
+
+    if (!file) {
+      return res.status(400).json({ error: 'No audio file provided in request' });
+    }
+
+    const title = (req.body.title || path.parse(file.originalname).name).trim();
+    const artist = (req.body.artist || 'Unknown Artist').trim();
+    const album = (req.body.album || '').trim();
+    const genre = (req.body.genre || '').trim();
+    const duration = req.body.duration ? parseFloat(req.body.duration) : null;
+
+    // Sanitize filename to prevent directory traversal
+    const sanitizedFilename = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const bucketName = config.storageBucket || 'songs';
+    const tableName = config.tableName || 'songs';
+
+    // 1. Check for duplicate file in bucket to prevent overwriting without consent
+    try {
+      const { data: existingFiles } = await client.storage.from(bucketName).list('', {
+        search: sanitizedFilename,
       });
 
-    if (uploadErr) {
-      if (uploadErr.message.includes('row-level security') || (uploadErr as any).statusCode === '425') {
-        throw new Error(
-          `Supabase Storage upload blocked by Row-Level Security (RLS) for bucket '${bucketName}'. ` +
-          `Please sign in as an authorized administrator and ensure the Storage INSERT policy is enabled in Supabase SQL Editor.`
-        );
+      if (existingFiles && existingFiles.some((f) => f.name === sanitizedFilename)) {
+        const logEntry: UploadActivityLog = {
+          id: `upload-${Date.now()}`,
+          projectId: config.id,
+          fileName: sanitizedFilename,
+          fileSize: file.size,
+          title,
+          artist,
+          status: 'failed',
+          errorMessage: 'A file with this name already exists in the storage bucket.',
+          timestamp: new Date().toISOString(),
+        };
+        appendUploadLog(logEntry);
+        return res.status(409).json({
+          error: `Duplicate file detected: '${sanitizedFilename}' already exists in '${bucketName}'. Please rename the file before uploading.`,
+        });
       }
-      throw new Error(`Storage upload error: ${uploadErr.message}`);
+    } catch (err) {
+      // If list check fails, log and continue
+      console.warn('Could not verify duplicate existence:', err);
     }
-    storageUploadSuccess = true;
 
-    // Get public URL
-    const publicUrlData = client.storage.from(bucketName).getPublicUrl(sanitizedFilename);
-    const publicUrl = publicUrlData.data?.publicUrl;
+    // 2. Upload audio file to Supabase Storage
+    let storageUploadSuccess = false;
+    let coverPath: string | null = null;
+    let coverPublicUrl: string | null = null;
 
-    // 3. Save song metadata to Database Table (dynamically adapt to schema)
-    const { data: sampleRow } = await client.from(tableName).select('*').limit(1);
-    const existingCols = sampleRow && sampleRow[0] ? Object.keys(sampleRow[0]) : null;
+    try {
+      const { data: uploadData, error: uploadErr } = await client.storage
+        .from(bucketName)
+        .upload(sanitizedFilename, file.buffer, {
+          contentType: file.mimetype || 'audio/mpeg',
+          upsert: false,
+        });
 
-    const songRecord: Record<string, any> = {
-      title,
-      artist: artist || 'Unknown Artist',
-      file_name: sanitizedFilename,
-      file_size: file.size,
-      created_at: new Date().toISOString(),
-    };
+      if (uploadErr) {
+        if (uploadErr.message.includes('row-level security') || (uploadErr as any).statusCode === '425') {
+          throw new Error(
+            `Supabase Storage upload blocked by Row-Level Security (RLS) for bucket '${bucketName}'. ` +
+            `Please sign in as an authorized administrator and ensure the Storage INSERT policy is enabled in Supabase SQL Editor.`
+          );
+        }
+        throw new Error(`Storage upload error: ${uploadErr.message}`);
+      }
+      storageUploadSuccess = true;
 
-    if (!existingCols || existingCols.includes('album')) songRecord.album = album || 'Music';
-    if (!existingCols || existingCols.includes('genre')) songRecord.genre = genre || 'Audio';
-    if (!existingCols || existingCols.includes('duration')) {
-      songRecord.duration = duration ? (typeof duration === 'number' ? duration : parseInt(duration, 10) || 180) : 180;
-    }
-    if (!existingCols || existingCols.includes('file_path')) songRecord.file_path = sanitizedFilename;
-    if (!existingCols || existingCols.includes('storage_path')) songRecord.storage_path = sanitizedFilename;
-    if (!existingCols || existingCols.includes('audio_url')) songRecord.audio_url = publicUrl || null;
-    if (!existingCols || existingCols.includes('public_url')) songRecord.public_url = publicUrl || null;
-    if (existingCols && existingCols.includes('updated_at')) songRecord.updated_at = new Date().toISOString();
+      // 2b. Upload cover image to storage if provided
+      if (coverFile) {
+        const ext = path.extname(coverFile.originalname).toLowerCase() || '.jpg';
+        const cleanCoverBase = path.parse(sanitizedFilename).name;
+        coverPath = `covers/${Date.now()}_${cleanCoverBase}${ext}`;
 
-    const { data: dbData, error: dbErr } = await client
-      .from(tableName)
-      .insert([songRecord])
-      .select();
+        const { error: coverErr } = await client.storage
+          .from(bucketName)
+          .upload(coverPath, coverFile.buffer, {
+            contentType: coverFile.mimetype || 'image/jpeg',
+            upsert: false,
+          });
 
-    if (dbErr) {
-      // Rollback uploaded file to avoid orphaned storage object
-      console.error('Database insertion failed, rolling back storage upload...', dbErr);
-      await client.storage.from(bucketName).remove([sanitizedFilename]);
-      storageUploadSuccess = false;
+        if (!coverErr) {
+          coverPublicUrl = client.storage.from(bucketName).getPublicUrl(coverPath).data?.publicUrl || null;
+        } else {
+          console.warn('Cover upload notice:', coverErr.message);
+        }
+      }
 
-      const logEntry: UploadActivityLog = {
-        id: `upload-${Date.now()}`,
-        projectId: config.id,
-        fileName: sanitizedFilename,
-        fileSize: file.size,
+      // Get audio public URL
+      const publicUrlData = client.storage.from(bucketName).getPublicUrl(sanitizedFilename);
+      const publicUrl = publicUrlData.data?.publicUrl;
+
+      // 3. Save song metadata to Database Table (dynamically adapt to schema)
+      const { data: sampleRow } = await client.from(tableName).select('*').limit(1);
+      const existingCols = sampleRow && sampleRow[0] ? Object.keys(sampleRow[0]) : null;
+
+      const songRecord: Record<string, any> = {
         title,
-        artist,
-        status: 'failed',
-        errorMessage: `Database insert failed: ${dbErr.message}. Upload was safely rolled back.`,
-        timestamp: new Date().toISOString(),
+        artist: artist || 'Unknown Artist',
+        file_name: sanitizedFilename,
+        file_size: file.size,
+        created_at: new Date().toISOString(),
       };
-      appendUploadLog(logEntry);
 
-      return res.status(500).json({
-        error: `Song metadata could not be saved to table '${tableName}': ${dbErr.message}. Storage upload was rolled back to prevent orphaned files.`,
-      });
-    }
+      if (!existingCols || existingCols.includes('album')) songRecord.album = album || 'Music';
+      if (!existingCols || existingCols.includes('genre')) songRecord.genre = genre || 'Audio';
+      if (!existingCols || existingCols.includes('duration')) {
+        songRecord.duration = duration ? (typeof duration === 'number' ? duration : parseInt(duration, 10) || 180) : 180;
+      }
+      if (!existingCols || existingCols.includes('file_path')) songRecord.file_path = sanitizedFilename;
+      if (!existingCols || existingCols.includes('storage_path')) songRecord.storage_path = sanitizedFilename;
+      if (!existingCols || existingCols.includes('audio_url')) songRecord.audio_url = publicUrl || null;
+      if (!existingCols || existingCols.includes('public_url')) songRecord.public_url = publicUrl || null;
+      if (!existingCols || existingCols.includes('cover_url')) songRecord.cover_url = coverPublicUrl || null;
+      if (existingCols && existingCols.includes('updated_at')) songRecord.updated_at = new Date().toISOString();
+
+      const { data: dbData, error: dbErr } = await client
+        .from(tableName)
+        .insert([songRecord])
+        .select();
+
+      if (dbErr) {
+        // Rollback uploaded audio and cover to avoid orphaned storage objects
+        console.error('Database insertion failed, rolling back storage uploads...', dbErr);
+        const filesToRemove = [sanitizedFilename];
+        if (coverPath) filesToRemove.push(coverPath);
+        await client.storage.from(bucketName).remove(filesToRemove).catch(() => {});
+        storageUploadSuccess = false;
+
+        const logEntry: UploadActivityLog = {
+          id: `upload-${Date.now()}`,
+          projectId: config.id,
+          fileName: sanitizedFilename,
+          fileSize: file.size,
+          title,
+          artist,
+          status: 'failed',
+          errorMessage: `Database insert failed: ${dbErr.message}. Upload was safely rolled back.`,
+          timestamp: new Date().toISOString(),
+        };
+        appendUploadLog(logEntry);
+
+        return res.status(500).json({
+          error: `Song metadata could not be saved to table '${tableName}': ${dbErr.message}. Storage upload was rolled back to prevent orphaned files.`,
+        });
+      }
 
     // Success!
     const logEntry: UploadActivityLog = {

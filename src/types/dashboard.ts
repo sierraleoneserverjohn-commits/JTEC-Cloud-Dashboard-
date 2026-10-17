@@ -49,6 +49,7 @@ export interface SongMetadataItem {
   file_size?: number;
   storage_path?: string;
   public_url?: string;
+  cover_url?: string;
   created_at: string;
 }
 

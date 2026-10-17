@@ -280,6 +280,7 @@ async function inspectProjectClientSide(config: LocalProjectConfig): Promise<{
         file_size: row.file_size || row.size || undefined,
         storage_path: row.file_path || row.storage_path || undefined,
         public_url: row.audio_url || row.public_url || undefined,
+        cover_url: row.cover_url || row.image_url || undefined,
         created_at: row.created_at || new Date().toISOString(),
       }));
 
@@ -752,6 +753,7 @@ export async function uploadAudioFile(
     album: string;
     genre: string;
     duration: string;
+    coverFile?: File | Blob | null;
   }
 ): Promise<{ success: boolean; song: any }> {
   const configs = getStoredConfigs();
@@ -779,6 +781,9 @@ export async function uploadAudioFile(
     formData.append('album', metadata.album);
     formData.append('genre', metadata.genre);
     formData.append('duration', metadata.duration);
+    if (metadata.coverFile) {
+      formData.append('coverFile', metadata.coverFile);
+    }
 
     const headers: Record<string, string> = {};
     if (authToken) {
@@ -810,6 +815,8 @@ export async function uploadAudioFile(
   const bucket = config.storageBucket || 'music';
   const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const filePath = `${Date.now()}_${cleanName}`;
+  let coverPath: string | null = null;
+  let coverPublicUrl: string | null = null;
 
   // Upload to Supabase Storage using authenticated or anonymous client
   const { data: uploadData, error: uploadErr } = await client.storage.from(bucket).upload(filePath, file, {
@@ -828,6 +835,29 @@ export async function uploadAudioFile(
     throw new Error(`Supabase Storage upload failed: ${msg}`);
   }
 
+  // 2b. Upload cover image to storage if provided
+  if (metadata.coverFile) {
+    try {
+      const coverType = metadata.coverFile.type || 'image/jpeg';
+      const ext = coverType.includes('png') ? 'png' : coverType.includes('webp') ? 'webp' : 'jpg';
+      const cleanBase = cleanName.replace(/\.[^/.]+$/, '');
+      coverPath = `covers/${Date.now()}_${cleanBase}.${ext}`;
+
+      const { error: coverErr } = await client.storage.from(bucket).upload(coverPath, metadata.coverFile, {
+        contentType: coverType,
+        upsert: false,
+      });
+
+      if (!coverErr) {
+        coverPublicUrl = client.storage.from(bucket).getPublicUrl(coverPath).data?.publicUrl || null;
+      } else {
+        console.warn('Cover upload notice:', coverErr.message);
+      }
+    } catch (cErr: any) {
+      console.warn('Cover upload notice:', cErr);
+    }
+  }
+
   const publicUrl = client.storage.from(bucket).getPublicUrl(filePath).data?.publicUrl || '';
 
   // Insert metadata into table (ensuring all not-null columns are provided)
@@ -842,21 +872,25 @@ export async function uploadAudioFile(
     file_path: filePath,
     file_size: file.size,
     audio_url: publicUrl,
+    cover_url: coverPublicUrl || null,
     created_at: new Date().toISOString(),
   };
 
   const { data: dbData, error: dbErr } = await client.from(table).insert([newSong]).select();
 
   if (dbErr) {
+    // Rollback uploaded storage object(s) to avoid orphaned files
+    const toRemove = [filePath];
+    if (coverPath) toRemove.push(coverPath);
+    await client.storage.from(bucket).remove(toRemove).catch(() => {});
+
     if (dbErr.message.toLowerCase().includes('row-level security')) {
-      // Rollback uploaded storage object to avoid orphaned files
-      await client.storage.from(bucket).remove([filePath]).catch(() => {});
       throw new Error(
         `Song metadata could not be saved to '${table}' because table Row-Level Security (RLS) blocked the insert. ` +
         `Storage upload was rolled back to prevent orphaned files. Please grant INSERT on '${table}' to authenticated users.`
       );
     }
-    console.warn('Metadata insertion notice:', dbErr.message);
+    throw new Error(`Database error saving track: ${dbErr.message}. Upload was rolled back.`);
   }
 
   appendStoredLog({

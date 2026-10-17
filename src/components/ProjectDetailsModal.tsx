@@ -567,10 +567,25 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
                     {details.songs.map((song) => (
                       <div
                         key={song.id}
-                        className="grid grid-cols-12 items-center px-4 py-3 text-xs hover:bg-neutral-900/70 transition-colors"
+                        className="grid grid-cols-12 items-center px-4 py-2.5 text-xs hover:bg-neutral-900/70 transition-colors"
                       >
-                        <div className="col-span-5 font-semibold text-white truncate pr-2">
-                          {song.title}
+                        <div className="col-span-5 font-semibold text-white truncate pr-2 flex items-center gap-2.5">
+                          <div className="h-8 w-8 rounded-lg overflow-hidden shrink-0 border border-neutral-800 bg-neutral-950 flex items-center justify-center">
+                            {song.cover_url ? (
+                              <img
+                                src={song.cover_url}
+                                alt={song.title}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <img
+                                src={resolveProjectLogo(details.id, details.logo)}
+                                alt={song.title}
+                                className="h-full w-full object-cover opacity-70"
+                              />
+                            )}
+                          </div>
+                          <span className="truncate">{song.title}</span>
                         </div>
                         <div className="col-span-4 text-neutral-400 truncate pr-2">
                           {song.artist || 'Unknown'}
@@ -587,12 +602,31 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
                     {details.songs.map((song) => (
                       <div
                         key={song.id}
-                        className="rounded-lg border border-neutral-800/80 bg-neutral-900/60 p-3 space-y-1 text-xs"
+                        className="rounded-lg border border-neutral-800/80 bg-neutral-900/60 p-3 space-y-2 text-xs"
                       >
-                        <p className="font-semibold text-white leading-snug">{song.title}</p>
-                        <p className="text-neutral-400 text-[11px]">
-                          {song.artist || 'Unknown Artist'} {song.album ? `· ${song.album}` : ''}
-                        </p>
+                        <div className="flex items-center gap-3">
+                          <div className="h-10 w-10 rounded-lg overflow-hidden shrink-0 border border-neutral-800 bg-neutral-950 flex items-center justify-center">
+                            {song.cover_url ? (
+                              <img
+                                src={song.cover_url}
+                                alt={song.title}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <img
+                                src={resolveProjectLogo(details.id, details.logo)}
+                                alt={song.title}
+                                className="h-full w-full object-cover opacity-70"
+                              />
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="font-semibold text-white leading-snug truncate">{song.title}</p>
+                            <p className="text-neutral-400 text-[11px] truncate">
+                              {song.artist || 'Unknown Artist'} {song.album ? `· ${song.album}` : ''}
+                            </p>
+                          </div>
+                        </div>
                         <div className="flex items-center justify-between pt-1 border-t border-neutral-800/60 text-[10px] text-neutral-500 font-mono">
                           <span className="truncate max-w-[180px]">{song.file_name}</span>
                           <span>{new Date(song.created_at).toLocaleDateString()}</span>
