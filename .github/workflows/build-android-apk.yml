@@ -44,12 +44,28 @@ jobs:
           java-version: '21'
           cache: 'gradle'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android Licenses & Ensure Build Tools
+      - name: Accept Android SDK Licenses Non-Interactively
         run: |
-          yes | sdkmanager --licenses || true
+          ANDROID_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER="${ANDROID_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="sdkmanager"
+          fi
+          mkdir -p "$ANDROID_ROOT/licenses"
+          echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479451eabf01fb78af6dfcb131a6481e\n84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_ROOT/licenses/android-sdk-license"
+          echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_ROOT/licenses/android-sdk-preview-license"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses || true
+          set -o pipefail
+
+      - name: Install Required Android SDK Packages
+        run: |
+          ANDROID_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER="${ANDROID_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="sdkmanager"
+          fi
+          "$SDKMANAGER" --install "platform-tools" "platforms;android-36" "build-tools;35.0.0"
 
       - name: Make Gradle wrapper executable
         run: chmod +x android/gradlew
