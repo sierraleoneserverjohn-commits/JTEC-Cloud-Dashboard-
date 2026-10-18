@@ -9,7 +9,8 @@ import type {
 } from '../types/dashboard';
 import { resolveProjectLogo } from '../assets/logos';
 
-const STORAGE_KEY_PROJECTS = 'jtec_projects_config_v1';
+const STORAGE_KEY_PROJECTS_V1 = 'jtec_projects_config_v1';
+const STORAGE_KEY_PROJECTS = 'jtec_projects_config_v2';
 const STORAGE_KEY_UPLOAD_LOGS = 'jtec_upload_logs_v1';
 
 export interface LocalProjectConfig {
@@ -32,38 +33,41 @@ const DEFAULT_PROJECT_CONFIGS: LocalProjectConfig[] = [
     name: 'NASHEED',
     category: 'Nasheed & Spiritual Audio',
     logo: 'assets/images/logo_nasheed_1792083522907.jpg',
-    url: '',
-    anonKey: '',
-    storageBucket: 'nasheed-audio',
-    tableName: 'songs',
-    storageQuotaBytes: 1073741824,
-    projectRef: '',
-    lastTestedAt: null,
-  },
-  {
-    id: 'love-chill',
-    name: 'LOVE & CHILL',
-    category: 'Lofi, Melodic & Chill Beats',
-    logo: 'assets/images/logo_love_chill_1792083523142.jpg',
-    url: 'https://cgpzpygvdpspctbaihac.supabase.co',
+    url: (import.meta.env.VITE_SUPABASE_URL_NASHEED as string) || 'https://ttvkfrzyugdetlbcquki.supabase.co',
     anonKey:
-      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNncHpweWd2ZHBzcGN0YmFpaGFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEzNzA5MDAsImV4cCI6MjEwNjk0NjkwMH0.6fgCjNNHyMPZE0P7cDJA3L8ax7nbdOdr4dA7sef_m4s',
-    storageBucket: 'music',
-    tableName: 'songs',
+      (import.meta.env.VITE_SUPABASE_ANON_KEY_NASHEED as string) ||
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0dmtmcnp5dWdkZXRsYmNxdWtpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY0ODg5MDEsImV4cCI6MjEwMjA2NDkwMX0.fmgDXlcBwueXHjL787Wjb10WC6WVXkJZj5CkTTJ0Tn4',
+    storageBucket: (import.meta.env.VITE_SUPABASE_BUCKET_NASHEED as string) || 'nasheed-audio',
+    tableName: (import.meta.env.VITE_SUPABASE_TABLE_NASHEED as string) || 'songs',
     storageQuotaBytes: 1073741824,
     projectRef: '',
-    lastTestedAt: '2026-10-15T17:33:00.452Z',
+    lastTestedAt: '2026-10-18T09:40:11.870Z',
   },
   {
     id: 'jtec-music',
     name: 'JTEC MUSIC',
     category: 'Mainstream & JTEC Music Catalog',
     logo: 'assets/images/logo_jtec_music_1792083523229.jpg',
-    url: '',
-    anonKey: '',
-    storageBucket: 'jtec-music-audio',
-    tableName: 'songs',
-    storageQuotaBytes: null,
+    url: (import.meta.env.VITE_SUPABASE_URL_JTEC_MUSIC as string) || 'https://cgpzpygvdpspctbaihac.supabase.co',
+    anonKey:
+      (import.meta.env.VITE_SUPABASE_ANON_KEY_JTEC_MUSIC as string) ||
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNncHpweWd2ZHBzcGN0YmFpaGFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEzNzA5MDAsImV4cCI6MjEwNjk0NjkwMH0.6fgCjNNHyMPZE0P7cDJA3L8ax7nbdOdr4dA7sef_m4s',
+    storageBucket: (import.meta.env.VITE_SUPABASE_BUCKET_JTEC_MUSIC as string) || 'music',
+    tableName: (import.meta.env.VITE_SUPABASE_TABLE_JTEC_MUSIC as string) || 'songs',
+    storageQuotaBytes: 1073741824,
+    projectRef: '',
+    lastTestedAt: '2026-10-18T09:40:11.870Z',
+  },
+  {
+    id: 'love-chill',
+    name: 'LOVE & CHILL',
+    category: 'Lofi, Melodic & Chill Beats',
+    logo: 'assets/images/logo_love_chill_1792083523142.jpg',
+    url: (import.meta.env.VITE_SUPABASE_URL_LOVE_CHILL as string) || '',
+    anonKey: (import.meta.env.VITE_SUPABASE_ANON_KEY_LOVE_CHILL as string) || '',
+    storageBucket: (import.meta.env.VITE_SUPABASE_BUCKET_LOVE_CHILL as string) || 'love-chill-audio',
+    tableName: (import.meta.env.VITE_SUPABASE_TABLE_LOVE_CHILL as string) || 'songs',
+    storageQuotaBytes: 1073741824,
     projectRef: '',
     lastTestedAt: null,
   },
@@ -79,7 +83,48 @@ function formatBytes(bytes: number): string {
 
 export function getStoredConfigs(): LocalProjectConfig[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY_PROJECTS);
+    let raw = localStorage.getItem(STORAGE_KEY_PROJECTS);
+    if (!raw) {
+      // Check for v1 migration
+      const legacyRaw = localStorage.getItem(STORAGE_KEY_PROJECTS_V1);
+      if (legacyRaw) {
+        try {
+          const legacyParsed = JSON.parse(legacyRaw) as LocalProjectConfig[];
+          const migrated = DEFAULT_PROJECT_CONFIGS.map((def) => {
+            // If legacy had cgpzpygvdpspctbaihac on love-chill, map it to jtec-music!
+            if (def.id === 'jtec-music') {
+              const legacyLove = legacyParsed.find((p) => p.id === 'love-chill');
+              if (legacyLove && legacyLove.url?.includes('cgpzpygvdpspctbaihac')) {
+                return {
+                  ...def,
+                  url: legacyLove.url,
+                  anonKey: legacyLove.anonKey || def.anonKey,
+                  storageBucket: legacyLove.storageBucket || def.storageBucket,
+                  tableName: legacyLove.tableName || def.tableName,
+                };
+              }
+            }
+            const found = legacyParsed.find((p) => p.id === def.id);
+            if (!found) return def;
+            // If love-chill had the jtec-music credentials, clear it for the new separate project
+            if (def.id === 'love-chill' && found.url?.includes('cgpzpygvdpspctbaihac')) {
+              return def;
+            }
+            return {
+              ...def,
+              ...found,
+              url: found.url || def.url,
+              anonKey: found.anonKey || def.anonKey,
+              storageBucket: found.storageBucket || def.storageBucket,
+              tableName: found.tableName || def.tableName,
+            };
+          });
+          localStorage.setItem(STORAGE_KEY_PROJECTS, JSON.stringify(migrated));
+          return migrated;
+        } catch {}
+      }
+    }
+
     if (raw) {
       const parsed = JSON.parse(raw) as LocalProjectConfig[];
       return DEFAULT_PROJECT_CONFIGS.map((def) => {
@@ -858,23 +903,39 @@ export async function uploadAudioFile(
     }
   }
 
-  const publicUrl = client.storage.from(bucket).getPublicUrl(filePath).data?.publicUrl || '';
+  const publicUrl =
+    client.storage.from(bucket).getPublicUrl(filePath).data?.publicUrl ||
+    `${config.url.replace(/\/+$/, '')}/storage/v1/object/public/${bucket}/${encodeURIComponent(filePath)}`;
 
-  // Insert metadata into table (ensuring all not-null columns are provided)
+  // Insert metadata into table (ensuring all not-null columns are provided and schema matches)
   const table = config.tableName || 'songs';
+  const { data: sampleRows } = await client.from(table).select('*').limit(1);
+  const existingCols = sampleRows && sampleRows[0] ? Object.keys(sampleRows[0]) : null;
+
   const newSong: Record<string, any> = {
     title: metadata.title,
     artist: metadata.artist || 'Unknown Artist',
-    album: metadata.album || 'Single',
-    genre: metadata.genre || 'Music',
-    duration: parseInt(metadata.duration, 10) || 180,
     file_name: file.name,
-    file_path: filePath,
     file_size: file.size,
     audio_url: publicUrl,
-    cover_url: coverPublicUrl || null,
     created_at: new Date().toISOString(),
   };
+
+  if (!existingCols || existingCols.includes('album')) newSong.album = metadata.album || 'Single';
+  if (!existingCols || existingCols.includes('genre')) newSong.genre = metadata.genre || 'Music';
+  if (!existingCols || existingCols.includes('duration')) {
+    newSong.duration = parseInt(metadata.duration, 10) || 180;
+  }
+  if (!existingCols || existingCols.includes('file_path')) newSong.file_path = filePath;
+  if (!existingCols || existingCols.includes('storage_path')) newSong.storage_path = filePath;
+  if (!existingCols || existingCols.includes('public_url')) newSong.public_url = publicUrl;
+  if (!existingCols || existingCols.includes('cover_url')) newSong.cover_url = coverPublicUrl || null;
+  if (existingCols && existingCols.includes('file_hash')) {
+    newSong.file_hash = `${file.size}-${Date.now().toString(16)}`;
+  }
+  if (existingCols && existingCols.includes('updated_at')) {
+    newSong.updated_at = new Date().toISOString();
+  }
 
   const { data: dbData, error: dbErr } = await client.from(table).insert([newSong]).select();
 
@@ -1039,7 +1100,9 @@ export async function runSelfTestClientSide(projectId: string): Promise<{
       return { success: false, steps, error: `Upload 1 failed: ${up1Err.message}` };
     }
 
-    const song1Url = client.storage.from(bucket).getPublicUrl(song1Name).data?.publicUrl || '';
+    const song1Url =
+      client.storage.from(bucket).getPublicUrl(song1Name).data?.publicUrl ||
+      `${config.url.replace(/\/+$/, '')}/storage/v1/object/public/${bucket}/${encodeURIComponent(song1Name)}`;
     await client.from(config.tableName || 'songs').insert([
       {
         title: 'Phase 1 Calibration Track 01',
@@ -1086,7 +1149,9 @@ export async function runSelfTestClientSide(projectId: string): Promise<{
       return { success: false, steps, error: up2Err.message };
     }
 
-    const song2Url = client.storage.from(bucket).getPublicUrl(song2Name).data?.publicUrl || '';
+    const song2Url =
+      client.storage.from(bucket).getPublicUrl(song2Name).data?.publicUrl ||
+      `${config.url.replace(/\/+$/, '')}/storage/v1/object/public/${bucket}/${encodeURIComponent(song2Name)}`;
     await client.from(config.tableName || 'songs').insert([
       {
         title: 'Phase 1 Calibration Track 02',

@@ -65,8 +65,8 @@ const DEFAULT_PROJECTS: StoredProjectConfig[] = [
     name: 'NASHEED',
     category: 'Nasheed & Spiritual Audio',
     logo: '/src/assets/images/logo_nasheed_1792083522907.jpg',
-    url: process.env.SUPABASE_URL_NASHEED || process.env.SUPABASE_URL_1 || '',
-    anonKey: process.env.SUPABASE_ANON_KEY_NASHEED || process.env.SUPABASE_ANON_KEY_1 || '',
+    url: process.env.SUPABASE_URL_NASHEED || process.env.SUPABASE_URL_1 || 'https://ttvkfrzyugdetlbcquki.supabase.co',
+    anonKey: process.env.SUPABASE_ANON_KEY_NASHEED || process.env.SUPABASE_ANON_KEY_1 || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0dmtmcnp5dWdkZXRsYmNxdWtpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY0ODg5MDEsImV4cCI6MjEwMjA2NDkwMX0.fmgDXlcBwueXHjL787Wjb10WC6WVXkJZj5CkTTJ0Tn4',
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY_NASHEED || process.env.SUPABASE_SERVICE_ROLE_KEY_1 || '',
     storageBucket: process.env.SUPABASE_BUCKET_NASHEED || 'nasheed-audio',
     tableName: process.env.SUPABASE_TABLE_NASHEED || 'songs',
@@ -75,42 +75,42 @@ const DEFAULT_PROJECTS: StoredProjectConfig[] = [
       : 1073741824, // 1 GB default quota
     managementApiToken: process.env.SUPABASE_MGMT_TOKEN_NASHEED || '',
     projectRef: process.env.SUPABASE_PROJECT_REF_NASHEED || '',
-    lastRefreshedAt: null,
-    lastTestedAt: null,
-  },
-  {
-    id: 'love-chill',
-    name: 'LOVE & CHILL',
-    category: 'Lofi, Melodic & Chill Beats',
-    logo: '/src/assets/images/logo_love_chill_1792083523142.jpg',
-    url: process.env.SUPABASE_URL_LOVE_CHILL || process.env.SUPABASE_URL_2 || 'https://cgpzpygvdpspctbaihac.supabase.co',
-    anonKey: process.env.SUPABASE_ANON_KEY_LOVE_CHILL || process.env.SUPABASE_ANON_KEY_2 || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNncHpweWd2ZHBzcGN0YmFpaGFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEzNzA5MDAsImV4cCI6MjEwNjk0NjkwMH0.6fgCjNNHyMPZE0P7cDJA3L8ax7nbdOdr4dA7sef_m4s',
-    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY_LOVE_CHILL || process.env.SUPABASE_SERVICE_ROLE_KEY_2 || '',
-    storageBucket: process.env.SUPABASE_BUCKET_LOVE_CHILL || 'music',
-    tableName: process.env.SUPABASE_TABLE_LOVE_CHILL || 'songs',
-    storageQuotaBytes: process.env.SUPABASE_STORAGE_LIMIT_LOVE_CHILL
-      ? parseInt(process.env.SUPABASE_STORAGE_LIMIT_LOVE_CHILL, 10)
-      : 1073741824, // 1 GB default quota
-    managementApiToken: process.env.SUPABASE_MGMT_TOKEN_LOVE_CHILL || '',
-    projectRef: process.env.SUPABASE_PROJECT_REF_LOVE_CHILL || '',
-    lastRefreshedAt: '2026-10-16T13:00:00.000Z',
-    lastTestedAt: '2026-10-15T17:33:00.452Z',
+    lastRefreshedAt: '2026-10-18T09:40:08.451Z',
+    lastTestedAt: '2026-10-18T09:40:11.870Z',
   },
   {
     id: 'jtec-music',
     name: 'JTEC MUSIC',
     category: 'Mainstream & JTEC Music Catalog',
     logo: '/src/assets/images/logo_jtec_music_1792083523229.jpg',
-    url: process.env.SUPABASE_URL_JTEC_MUSIC || process.env.SUPABASE_URL_3 || '',
-    anonKey: process.env.SUPABASE_ANON_KEY_JTEC_MUSIC || process.env.SUPABASE_ANON_KEY_3 || '',
+    url: process.env.SUPABASE_URL_JTEC_MUSIC || process.env.SUPABASE_URL_3 || 'https://cgpzpygvdpspctbaihac.supabase.co',
+    anonKey: process.env.SUPABASE_ANON_KEY_JTEC_MUSIC || process.env.SUPABASE_ANON_KEY_3 || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNncHpweWd2ZHBzcGN0YmFpaGFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEzNzA5MDAsImV4cCI6MjEwNjk0NjkwMH0.6fgCjNNHyMPZE0P7cDJA3L8ax7nbdOdr4dA7sef_m4s',
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY_JTEC_MUSIC || process.env.SUPABASE_SERVICE_ROLE_KEY_3 || '',
-    storageBucket: process.env.SUPABASE_BUCKET_JTEC_MUSIC || 'jtec-music-audio',
+    storageBucket: process.env.SUPABASE_BUCKET_JTEC_MUSIC || 'music',
     tableName: process.env.SUPABASE_TABLE_JTEC_MUSIC || 'songs',
     storageQuotaBytes: process.env.SUPABASE_STORAGE_LIMIT_JTEC_MUSIC
       ? parseInt(process.env.SUPABASE_STORAGE_LIMIT_JTEC_MUSIC, 10)
-      : null,
+      : 1073741824, // 1 GB default quota
     managementApiToken: process.env.SUPABASE_MGMT_TOKEN_JTEC_MUSIC || '',
     projectRef: process.env.SUPABASE_PROJECT_REF_JTEC_MUSIC || '',
+    lastRefreshedAt: '2026-10-18T09:40:08.451Z',
+    lastTestedAt: '2026-10-18T09:40:11.870Z',
+  },
+  {
+    id: 'love-chill',
+    name: 'LOVE & CHILL',
+    category: 'Lofi, Melodic & Chill Beats',
+    logo: '/src/assets/images/logo_love_chill_1792083523142.jpg',
+    url: process.env.SUPABASE_URL_LOVE_CHILL || process.env.SUPABASE_URL_2 || '',
+    anonKey: process.env.SUPABASE_ANON_KEY_LOVE_CHILL || process.env.SUPABASE_ANON_KEY_2 || '',
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY_LOVE_CHILL || process.env.SUPABASE_SERVICE_ROLE_KEY_2 || '',
+    storageBucket: process.env.SUPABASE_BUCKET_LOVE_CHILL || 'love-chill-audio',
+    tableName: process.env.SUPABASE_TABLE_LOVE_CHILL || 'songs',
+    storageQuotaBytes: process.env.SUPABASE_STORAGE_LIMIT_LOVE_CHILL
+      ? parseInt(process.env.SUPABASE_STORAGE_LIMIT_LOVE_CHILL, 10)
+      : 1073741824, // 1 GB default quota
+    managementApiToken: process.env.SUPABASE_MGMT_TOKEN_LOVE_CHILL || '',
+    projectRef: process.env.SUPABASE_PROJECT_REF_LOVE_CHILL || '',
     lastRefreshedAt: null,
     lastTestedAt: null,
   },
@@ -984,7 +984,9 @@ app.post(
 
       // Get audio public URL
       const publicUrlData = client.storage.from(bucketName).getPublicUrl(sanitizedFilename);
-      const publicUrl = publicUrlData.data?.publicUrl;
+      const publicUrl =
+        publicUrlData.data?.publicUrl ||
+        `${config.url.replace(/\/+$/, '')}/storage/v1/object/public/${bucketName}/${encodeURIComponent(sanitizedFilename)}`;
 
       // 3. Save song metadata to Database Table (dynamically adapt to schema)
       const { data: sampleRow } = await client.from(tableName).select('*').limit(1);
@@ -995,6 +997,7 @@ app.post(
         artist: artist || 'Unknown Artist',
         file_name: sanitizedFilename,
         file_size: file.size,
+        audio_url: publicUrl,
         created_at: new Date().toISOString(),
       };
 
@@ -1005,9 +1008,9 @@ app.post(
       }
       if (!existingCols || existingCols.includes('file_path')) songRecord.file_path = sanitizedFilename;
       if (!existingCols || existingCols.includes('storage_path')) songRecord.storage_path = sanitizedFilename;
-      if (!existingCols || existingCols.includes('audio_url')) songRecord.audio_url = publicUrl || null;
-      if (!existingCols || existingCols.includes('public_url')) songRecord.public_url = publicUrl || null;
+      if (!existingCols || existingCols.includes('public_url')) songRecord.public_url = publicUrl;
       if (!existingCols || existingCols.includes('cover_url')) songRecord.cover_url = coverPublicUrl || null;
+      if (!existingCols || existingCols.includes('file_hash')) songRecord.file_hash = `${file.size}-${Date.now().toString(16)}`;
       if (existingCols && existingCols.includes('updated_at')) songRecord.updated_at = new Date().toISOString();
 
       const { data: dbData, error: dbErr } = await client

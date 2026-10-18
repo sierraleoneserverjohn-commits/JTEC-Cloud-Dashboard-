@@ -28,20 +28,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22 (LTS)
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        run: npm ci
 
       - name: Build static dashboard for GitHub Pages
         run: npm run build:pages
         env:
           BASE_PATH: './'
           NODE_ENV: production
+          VITE_SUPABASE_URL_NASHEED: ${{ secrets.VITE_SUPABASE_URL_NASHEED || vars.VITE_SUPABASE_URL_NASHEED || '' }}
+          VITE_SUPABASE_ANON_KEY_NASHEED: ${{ secrets.VITE_SUPABASE_ANON_KEY_NASHEED || vars.VITE_SUPABASE_ANON_KEY_NASHEED || '' }}
+          VITE_SUPABASE_BUCKET_NASHEED: ${{ secrets.VITE_SUPABASE_BUCKET_NASHEED || vars.VITE_SUPABASE_BUCKET_NASHEED || 'nasheed-audio' }}
+          VITE_SUPABASE_TABLE_NASHEED: ${{ secrets.VITE_SUPABASE_TABLE_NASHEED || vars.VITE_SUPABASE_TABLE_NASHEED || 'songs' }}
+          VITE_SUPABASE_URL_JTEC_MUSIC: ${{ secrets.VITE_SUPABASE_URL_JTEC_MUSIC || vars.VITE_SUPABASE_URL_JTEC_MUSIC || '' }}
+          VITE_SUPABASE_ANON_KEY_JTEC_MUSIC: ${{ secrets.VITE_SUPABASE_ANON_KEY_JTEC_MUSIC || vars.VITE_SUPABASE_ANON_KEY_JTEC_MUSIC || '' }}
+          VITE_SUPABASE_BUCKET_JTEC_MUSIC: ${{ secrets.VITE_SUPABASE_BUCKET_JTEC_MUSIC || vars.VITE_SUPABASE_BUCKET_JTEC_MUSIC || 'music' }}
+          VITE_SUPABASE_TABLE_JTEC_MUSIC: ${{ secrets.VITE_SUPABASE_TABLE_JTEC_MUSIC || vars.VITE_SUPABASE_TABLE_JTEC_MUSIC || 'songs' }}
+          VITE_SUPABASE_URL_LOVE_CHILL: ${{ secrets.VITE_SUPABASE_URL_LOVE_CHILL || vars.VITE_SUPABASE_URL_LOVE_CHILL || '' }}
+          VITE_SUPABASE_ANON_KEY_LOVE_CHILL: ${{ secrets.VITE_SUPABASE_ANON_KEY_LOVE_CHILL || vars.VITE_SUPABASE_ANON_KEY_LOVE_CHILL || '' }}
+          VITE_SUPABASE_BUCKET_LOVE_CHILL: ${{ secrets.VITE_SUPABASE_BUCKET_LOVE_CHILL || vars.VITE_SUPABASE_BUCKET_LOVE_CHILL || 'love-chill-audio' }}
+          VITE_SUPABASE_TABLE_LOVE_CHILL: ${{ secrets.VITE_SUPABASE_TABLE_LOVE_CHILL || vars.VITE_SUPABASE_TABLE_LOVE_CHILL || 'songs' }}
 
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v5

@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build-apk:
-    name: Build Android Debug APK
+    name: Build Android APK (Debug & Release)
     runs-on: ubuntu-latest
 
     steps:
@@ -36,8 +36,21 @@ jobs:
         env:
           BASE_PATH: './'
           NODE_ENV: production
+          VITE_SUPABASE_URL_NASHEED: ${{ secrets.VITE_SUPABASE_URL_NASHEED || vars.VITE_SUPABASE_URL_NASHEED || '' }}
+          VITE_SUPABASE_ANON_KEY_NASHEED: ${{ secrets.VITE_SUPABASE_ANON_KEY_NASHEED || vars.VITE_SUPABASE_ANON_KEY_NASHEED || '' }}
+          VITE_SUPABASE_BUCKET_NASHEED: ${{ secrets.VITE_SUPABASE_BUCKET_NASHEED || vars.VITE_SUPABASE_BUCKET_NASHEED || 'nasheed-audio' }}
+          VITE_SUPABASE_TABLE_NASHEED: ${{ secrets.VITE_SUPABASE_TABLE_NASHEED || vars.VITE_SUPABASE_TABLE_NASHEED || 'songs' }}
+          VITE_SUPABASE_URL_JTEC_MUSIC: ${{ secrets.VITE_SUPABASE_URL_JTEC_MUSIC || vars.VITE_SUPABASE_URL_JTEC_MUSIC || '' }}
+          VITE_SUPABASE_ANON_KEY_JTEC_MUSIC: ${{ secrets.VITE_SUPABASE_ANON_KEY_JTEC_MUSIC || vars.VITE_SUPABASE_ANON_KEY_JTEC_MUSIC || '' }}
+          VITE_SUPABASE_BUCKET_JTEC_MUSIC: ${{ secrets.VITE_SUPABASE_BUCKET_JTEC_MUSIC || vars.VITE_SUPABASE_BUCKET_JTEC_MUSIC || 'music' }}
+          VITE_SUPABASE_TABLE_JTEC_MUSIC: ${{ secrets.VITE_SUPABASE_TABLE_JTEC_MUSIC || vars.VITE_SUPABASE_TABLE_JTEC_MUSIC || 'songs' }}
+          VITE_SUPABASE_URL_LOVE_CHILL: ${{ secrets.VITE_SUPABASE_URL_LOVE_CHILL || vars.VITE_SUPABASE_URL_LOVE_CHILL || '' }}
+          VITE_SUPABASE_ANON_KEY_LOVE_CHILL: ${{ secrets.VITE_SUPABASE_ANON_KEY_LOVE_CHILL || vars.VITE_SUPABASE_ANON_KEY_LOVE_CHILL || '' }}
+          VITE_SUPABASE_BUCKET_LOVE_CHILL: ${{ secrets.VITE_SUPABASE_BUCKET_LOVE_CHILL || vars.VITE_SUPABASE_BUCKET_LOVE_CHILL || 'love-chill-audio' }}
+          VITE_SUPABASE_TABLE_LOVE_CHILL: ${{ secrets.VITE_SUPABASE_TABLE_LOVE_CHILL || vars.VITE_SUPABASE_TABLE_LOVE_CHILL || 'songs' }}
 
       - name: Set up JDK 21
+        id: setup-java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -70,26 +83,39 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x android/gradlew
 
-      - name: Build Android Debug APK with Gradle
+      - name: Build Android Debug and Release APK with Gradle
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        env:
+          JAVA_HOME: ${{ steps.setup-java.outputs.path }}
+        run: |
+          ./gradlew assembleDebug assembleRelease --no-daemon --stacktrace
 
       - name: Verify APK Generation
         run: |
-          ls -la android/app/build/outputs/apk/debug/
-          if [ ! -f "android/app/build/outputs/apk/debug/app-debug.apk" ]; then
+          mkdir -p apks_output
+          if [ -f "android/app/build/outputs/apk/debug/app-debug.apk" ]; then
+            echo "Debug APK verified."
+            cp android/app/build/outputs/apk/debug/app-debug.apk apks_output/nasheed-dashboard-debug.apk
+            cp android/app/build/outputs/apk/debug/app-debug.apk nasheed-dashboard-debug.apk
+          else
             echo "Error: app-debug.apk not found!"
             exit 1
           fi
 
-      - name: Prepare Downloadable APK
-        run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk nasheed-dashboard-debug.apk
+          if [ -f "android/app/build/outputs/apk/release/app-release-unsigned.apk" ]; then
+            echo "Release (unsigned) APK verified."
+            cp android/app/build/outputs/apk/release/app-release-unsigned.apk apks_output/nasheed-dashboard-release-unsigned.apk
+          elif [ -f "android/app/build/outputs/apk/release/app-release.apk" ]; then
+            echo "Release APK verified."
+            cp android/app/build/outputs/apk/release/app-release.apk apks_output/nasheed-dashboard-release.apk
+          fi
 
-      - name: Upload Debug APK Artifact
+          ls -la apks_output/
+
+      - name: Upload APKs Artifact
         uses: actions/upload-artifact@v4
         with:
           name: nasheed-dashboard-apk
-          path: nasheed-dashboard-debug.apk
+          path: apks_output/
           if-no-files-found: error
           retention-days: 30
