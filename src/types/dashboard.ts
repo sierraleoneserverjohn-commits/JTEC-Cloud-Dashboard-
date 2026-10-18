@@ -50,6 +50,7 @@ export interface SongMetadataItem {
   storage_path?: string;
   public_url?: string;
   cover_url?: string;
+  file_hash?: string;
   created_at: string;
 }
 

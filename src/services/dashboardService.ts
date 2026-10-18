@@ -326,6 +326,7 @@ async function inspectProjectClientSide(config: LocalProjectConfig): Promise<{
         storage_path: row.file_path || row.storage_path || undefined,
         public_url: row.audio_url || row.public_url || undefined,
         cover_url: row.cover_url || row.image_url || undefined,
+        file_hash: row.file_hash || undefined,
         created_at: row.created_at || new Date().toISOString(),
       }));
 
@@ -601,6 +602,57 @@ export async function fetchProjectDetails(projectId: string): Promise<ProjectDet
 }
 
 /**
+ * Fetch existing songs strictly for a specific project
+ */
+export async function fetchProjectSongs(projectId: string): Promise<SongMetadataItem[]> {
+  try {
+    const details = await fetchProjectDetails(projectId);
+    if (details && Array.isArray(details.songs)) {
+      return details.songs;
+    }
+  } catch (err) {
+    console.warn(`Error fetching songs for project ${projectId}:`, err);
+  }
+
+  // Direct client-side query fallback
+  try {
+    const configs = getStoredConfigs();
+    const config = configs.find((p) => p.id === projectId) || configs[0];
+    if (!config.url || !config.anonKey) return [];
+
+    const client = getBrowserSupabaseClient(projectId, config.url, config.anonKey);
+    if (!client) return [];
+
+    const table = config.tableName || 'songs';
+    const { data: rows } = await client
+      .from(table)
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(300);
+
+    if (!rows) return [];
+
+    return rows.map((row: any) => ({
+      id: row.id || row.file_name,
+      title: row.title || row.name || row.file_name,
+      artist: row.artist || 'Unknown Artist',
+      album: row.album || undefined,
+      genre: row.genre || undefined,
+      duration: row.duration || undefined,
+      file_name: row.file_name || row.filename || '',
+      file_size: row.file_size || row.size || undefined,
+      storage_path: row.file_path || row.storage_path || undefined,
+      public_url: row.audio_url || row.public_url || undefined,
+      cover_url: row.cover_url || row.image_url || undefined,
+      file_hash: row.file_hash || undefined,
+      created_at: row.created_at || new Date().toISOString(),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Universal project configuration saver
  */
 export async function saveProjectConfig(
@@ -799,6 +851,8 @@ export async function uploadAudioFile(
     genre: string;
     duration: string;
     coverFile?: File | Blob | null;
+    file_hash?: string;
+    allowDuplicate?: boolean;
   }
 ): Promise<{ success: boolean; song: any }> {
   const configs = getStoredConfigs();
@@ -828,6 +882,12 @@ export async function uploadAudioFile(
     formData.append('duration', metadata.duration);
     if (metadata.coverFile) {
       formData.append('coverFile', metadata.coverFile);
+    }
+    if (metadata.file_hash) {
+      formData.append('file_hash', metadata.file_hash);
+    }
+    if (metadata.allowDuplicate) {
+      formData.append('allowDuplicate', 'true');
     }
 
     const headers: Record<string, string> = {};
@@ -931,7 +991,7 @@ export async function uploadAudioFile(
   if (!existingCols || existingCols.includes('public_url')) newSong.public_url = publicUrl;
   if (!existingCols || existingCols.includes('cover_url')) newSong.cover_url = coverPublicUrl || null;
   if (existingCols && existingCols.includes('file_hash')) {
-    newSong.file_hash = `${file.size}-${Date.now().toString(16)}`;
+    newSong.file_hash = metadata.file_hash || `${file.size}-${Date.now().toString(16)}`;
   }
   if (existingCols && existingCols.includes('updated_at')) {
     newSong.updated_at = new Date().toISOString();

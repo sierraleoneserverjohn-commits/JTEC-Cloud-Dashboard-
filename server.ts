@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
@@ -407,6 +408,7 @@ async function inspectProject(config: StoredProjectConfig): Promise<{
         storage_path: row.file_path || row.storage_path || undefined,
         public_url: row.audio_url || row.public_url || undefined,
         cover_url: row.cover_url || row.image_url || undefined,
+        file_hash: row.file_hash || undefined,
         created_at: row.created_at || new Date().toISOString(),
       }));
 
@@ -916,7 +918,11 @@ app.post(
         search: sanitizedFilename,
       });
 
-      if (existingFiles && existingFiles.some((f) => f.name === sanitizedFilename)) {
+      if (
+        existingFiles &&
+        existingFiles.some((f) => f.name === sanitizedFilename) &&
+        req.body.allowDuplicate !== 'true'
+      ) {
         const logEntry: UploadActivityLog = {
           id: `upload-${Date.now()}`,
           projectId: config.id,
@@ -930,7 +936,7 @@ app.post(
         };
         appendUploadLog(logEntry);
         return res.status(409).json({
-          error: `Duplicate file detected: '${sanitizedFilename}' already exists in '${bucketName}'. Please rename the file before uploading.`,
+          error: `Duplicate file detected: '${sanitizedFilename}' already exists in '${bucketName}'. Please rename the file or check 'Upload anyway' to proceed.`,
         });
       }
     } catch (err) {
@@ -1010,7 +1016,9 @@ app.post(
       if (!existingCols || existingCols.includes('storage_path')) songRecord.storage_path = sanitizedFilename;
       if (!existingCols || existingCols.includes('public_url')) songRecord.public_url = publicUrl;
       if (!existingCols || existingCols.includes('cover_url')) songRecord.cover_url = coverPublicUrl || null;
-      if (!existingCols || existingCols.includes('file_hash')) songRecord.file_hash = `${file.size}-${Date.now().toString(16)}`;
+      const computedSha256 =
+        req.body.file_hash || crypto.createHash('sha256').update(file.buffer).digest('hex');
+      if (!existingCols || existingCols.includes('file_hash')) songRecord.file_hash = computedSha256;
       if (existingCols && existingCols.includes('updated_at')) songRecord.updated_at = new Date().toISOString();
 
       const { data: dbData, error: dbErr } = await client
