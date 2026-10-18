@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build-apk:
-    name: Build Android APK (Debug & Release)
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
@@ -57,6 +57,21 @@ jobs:
           java-version: '21'
           cache: 'gradle'
 
+      - name: Apply Persistent Debug Keystore
+        run: |
+          if [ -n "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" ]; then
+            echo "Applying custom debug keystore from repository secret..."
+            echo "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > android/app/debug.keystore
+          fi
+          if [ ! -f "android/app/debug.keystore" ]; then
+            echo "Error: android/app/debug.keystore is missing!"
+            exit 1
+          fi
+          echo "Verified persistent keystore presence:"
+          ls -la android/app/debug.keystore
+          echo "Keystore Certificate Details:"
+          keytool -list -v -keystore android/app/debug.keystore -storepass android -alias androiddebugkey
+
       - name: Accept Android SDK Licenses Non-Interactively
         run: |
           ANDROID_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
@@ -90,32 +105,53 @@ jobs:
         run: |
           ./gradlew assembleDebug assembleRelease --no-daemon --stacktrace
 
-      - name: Verify APK Generation
+      - name: Verify Package ID, Signing Certificate & APK Integrity
         run: |
-          mkdir -p apks_output
-          if [ -f "android/app/build/outputs/apk/debug/app-debug.apk" ]; then
-            echo "Debug APK verified."
-            cp android/app/build/outputs/apk/debug/app-debug.apk apks_output/nasheed-dashboard-debug.apk
-            cp android/app/build/outputs/apk/debug/app-debug.apk nasheed-dashboard-debug.apk
-          else
+          DEBUG_APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$DEBUG_APK" ]; then
             echo "Error: app-debug.apk not found!"
             exit 1
           fi
 
-          if [ -f "android/app/build/outputs/apk/release/app-release-unsigned.apk" ]; then
-            echo "Release (unsigned) APK verified."
-            cp android/app/build/outputs/apk/release/app-release-unsigned.apk apks_output/nasheed-dashboard-release-unsigned.apk
-          elif [ -f "android/app/build/outputs/apk/release/app-release.apk" ]; then
-            echo "Release APK verified."
-            cp android/app/build/outputs/apk/release/app-release.apk apks_output/nasheed-dashboard-release.apk
+          echo "=========================================="
+          echo "VERIFYING NASHEED DASHBOARD DEBUG APK"
+          echo "=========================================="
+
+          ANDROID_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          APKSIGNER=$(find "${ANDROID_ROOT}/build-tools" -name apksigner 2>/dev/null | sort -V | tail -n 1)
+          AAPT2=$(find "${ANDROID_ROOT}/build-tools" -name aapt2 2>/dev/null | sort -V | tail -n 1)
+
+          if [ -n "$APKSIGNER" ] && [ -x "$APKSIGNER" ]; then
+            echo "--- APKSIGNER CERTIFICATE FINGERPRINTS ---"
+            "$APKSIGNER" verify --verbose --print-certs "$DEBUG_APK"
+          else
+            echo "--- KEYTOOL CERTIFICATE FINGERPRINTS ---"
+            keytool -printcert -jarfile "$DEBUG_APK"
           fi
 
-          ls -la apks_output/
+          if [ -n "$AAPT2" ] && [ -x "$AAPT2" ]; then
+            echo "--- DUMPING PACKAGE AND VERSION METADATA ---"
+            "$AAPT2" dump badging "$DEBUG_APK" | grep -E "package:|application-label:" || true
+          fi
 
-      - name: Upload APKs Artifact
+          # Prepare dedicated downloadable debug APK
+          mkdir -p apks_output
+          cp "$DEBUG_APK" apks_output/nasheed-dashboard-debug.apk
+          cp "$DEBUG_APK" nasheed-dashboard-debug.apk
+
+      - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: nasheed-dashboard-apk
-          path: apks_output/
+          path: apks_output/nasheed-dashboard-debug.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Upload Unsigned Release APK (Separate)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nasheed-dashboard-release-unsigned
+          path: android/app/build/outputs/apk/release/
+          if-no-files-found: ignore
+          retention-days: 14
