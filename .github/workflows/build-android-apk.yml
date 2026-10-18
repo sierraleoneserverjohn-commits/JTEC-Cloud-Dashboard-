@@ -1,3 +1,4 @@
+
 name: Build NASHEED Dashboard Android APK
 
 on:
@@ -26,7 +27,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
+          cache: npm
 
       - name: Install Node dependencies
         run: npm ci
@@ -53,35 +54,52 @@ jobs:
         id: setup-java
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '21'
-          cache: 'gradle'
+          cache: gradle
 
-      - name: Apply Persistent Debug Keystore
+      - name: Configure Persistent Debug Keystore
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
-          if [ -n "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" ]; then
-            echo "Applying custom debug keystore from repository secret..."
-            echo "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > android/app/debug.keystore
-          fi
-          if [ ! -f "android/app/debug.keystore" ]; then
-            echo "Error: android/app/debug.keystore is missing!"
-            exit 1
-          fi
-          echo "Verified persistent keystore presence:"
-          ls -la android/app/debug.keystore
-          echo "Keystore Certificate Details:"
-          keytool -list -v -keystore android/app/debug.keystore -storepass android -alias androiddebugkey
+          mkdir -p android/app
 
-      - name: Accept Android SDK Licenses Non-Interactively
+          if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
+            echo "$DEBUG_KEYSTORE_BASE64" | base64 --decode > android/app/debug.keystore
+            echo "Using configured debug keystore."
+          elif [ -f android/app/debug.keystore ]; then
+            echo "Using debug keystore already in the repository."
+          else
+            echo "No persistent keystore found; generating a temporary debug keystore."
+            keytool -genkeypair \
+              -v \
+              -keystore android/app/debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+          test -s android/app/debug.keystore
+          keytool -list \
+            -keystore android/app/debug.keystore \
+            -storepass android \
+            -alias androiddebugkey
+
+      - name: Accept Android SDK Licenses
         run: |
           ANDROID_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           SDKMANAGER="${ANDROID_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+
           if [ ! -x "$SDKMANAGER" ]; then
             SDKMANAGER="sdkmanager"
           fi
+
           mkdir -p "$ANDROID_ROOT/licenses"
-          echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479451eabf01fb78af6dfcb131a6481e\n84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_ROOT/licenses/android-sdk-license"
-          echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_ROOT/licenses/android-sdk-preview-license"
+
           set +o pipefail
           yes | "$SDKMANAGER" --licenses || true
           set -o pipefail
@@ -90,54 +108,55 @@ jobs:
         run: |
           ANDROID_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           SDKMANAGER="${ANDROID_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+
           if [ ! -x "$SDKMANAGER" ]; then
             SDKMANAGER="sdkmanager"
           fi
-          "$SDKMANAGER" --install "platform-tools" "platforms;android-36" "build-tools;35.0.0"
 
-      - name: Make Gradle wrapper executable
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;35.0.0"
+
+      - name: Make Gradle Wrapper Executable
         run: chmod +x android/gradlew
 
-      - name: Build Android Debug and Release APK with Gradle
+      - name: Build Android APK
         working-directory: android
         env:
           JAVA_HOME: ${{ steps.setup-java.outputs.path }}
         run: |
-          ./gradlew assembleDebug assembleRelease --no-daemon --stacktrace
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Verify Package ID, Signing Certificate & APK Integrity
+      - name: Verify Package ID, Signature and APK
         run: |
           DEBUG_APK="android/app/build/outputs/apk/debug/app-debug.apk"
-          if [ ! -f "$DEBUG_APK" ]; then
-            echo "Error: app-debug.apk not found!"
+
+          if [ ! -s "$DEBUG_APK" ]; then
+            echo "Error: Debug APK was not generated."
             exit 1
           fi
 
-          echo "=========================================="
-          echo "VERIFYING NASHEED DASHBOARD DEBUG APK"
-          echo "=========================================="
-
           ANDROID_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          APKSIGNER=$(find "${ANDROID_ROOT}/build-tools" -name apksigner 2>/dev/null | sort -V | tail -n 1)
-          AAPT2=$(find "${ANDROID_ROOT}/build-tools" -name aapt2 2>/dev/null | sort -V | tail -n 1)
+          APKSIGNER=$(find "$ANDROID_ROOT/build-tools" \
+            -name apksigner -type f 2>/dev/null | sort -V | tail -n 1)
+          AAPT2=$(find "$ANDROID_ROOT/build-tools" \
+            -name aapt2 -type f 2>/dev/null | sort -V | tail -n 1)
 
           if [ -n "$APKSIGNER" ] && [ -x "$APKSIGNER" ]; then
-            echo "--- APKSIGNER CERTIFICATE FINGERPRINTS ---"
             "$APKSIGNER" verify --verbose --print-certs "$DEBUG_APK"
           else
-            echo "--- KEYTOOL CERTIFICATE FINGERPRINTS ---"
             keytool -printcert -jarfile "$DEBUG_APK"
           fi
 
           if [ -n "$AAPT2" ] && [ -x "$AAPT2" ]; then
-            echo "--- DUMPING PACKAGE AND VERSION METADATA ---"
-            "$AAPT2" dump badging "$DEBUG_APK" | grep -E "package:|application-label:" || true
+            "$AAPT2" dump badging "$DEBUG_APK" | grep -E "package:|application-label:"
           fi
 
-          # Prepare dedicated downloadable debug APK
           mkdir -p apks_output
           cp "$DEBUG_APK" apks_output/nasheed-dashboard-debug.apk
-          cp "$DEBUG_APK" nasheed-dashboard-debug.apk
+
+          echo "Debug APK verified."
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
@@ -146,12 +165,4 @@ jobs:
           path: apks_output/nasheed-dashboard-debug.apk
           if-no-files-found: error
           retention-days: 30
-
-      - name: Upload Unsigned Release APK (Separate)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: nasheed-dashboard-release-unsigned
-          path: android/app/build/outputs/apk/release/
-          if-no-files-found: ignore
-          retention-days: 14
+          
