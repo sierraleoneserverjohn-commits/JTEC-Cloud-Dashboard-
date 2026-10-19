@@ -1133,6 +1133,340 @@ app.delete('/api/projects/:id/files/:filename', async (req, res) => {
   }
 });
 
+// 6b. Update Song Metadata (Title, Artist, Album, Genre, Duration)
+app.patch('/api/projects/:id/songs/:songId', async (req, res) => {
+  const configs = loadProjectConfigs();
+  const config = configs.find((p) => p.id === req.params.id);
+  if (!config) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  const client = getSupabaseClient(config, req.headers.authorization as string | undefined);
+  if (!client) {
+    return res.status(400).json({ error: 'Supabase client not initialized' });
+  }
+
+  const table = config.tableName || 'songs';
+  const songId = req.params.songId;
+  const { title, artist, album, genre, duration } = req.body;
+
+  try {
+    const { data: sampleRow } = await client.from(table).select('*').limit(1);
+    const existingCols = sampleRow && sampleRow[0] ? Object.keys(sampleRow[0]) : null;
+
+    const updates: Record<string, any> = {};
+    if (title !== undefined && (!existingCols || existingCols.includes('title'))) {
+      updates.title = title.trim();
+    }
+    if (artist !== undefined && (!existingCols || existingCols.includes('artist'))) {
+      updates.artist = artist.trim();
+    }
+    if (album !== undefined && (!existingCols || existingCols.includes('album'))) {
+      updates.album = album.trim();
+    }
+    if (genre !== undefined && (!existingCols || existingCols.includes('genre'))) {
+      updates.genre = genre.trim();
+    }
+    if (duration !== undefined && (!existingCols || existingCols.includes('duration'))) {
+      updates.duration = typeof duration === 'number' ? duration : parseInt(duration, 10) || 180;
+    }
+    if (existingCols && existingCols.includes('updated_at')) {
+      updates.updated_at = new Date().toISOString();
+    }
+
+    // Try finding by id first, fallback to file_name
+    let { data: updated, error: updateErr } = await client
+      .from(table)
+      .update(updates)
+      .eq('id', songId)
+      .select();
+
+    if (updateErr || !updated || updated.length === 0) {
+      const fallback = await client
+        .from(table)
+        .update(updates)
+        .eq('file_name', songId)
+        .select();
+      if (fallback.error) {
+        throw fallback.error;
+      }
+      updated = fallback.data;
+    }
+
+    res.json({ success: true, song: updated?.[0] || updates });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to update song metadata' });
+  }
+});
+
+// 6c. Add or Replace Cover Artwork
+app.post(
+  '/api/projects/:id/songs/:songId/cover',
+  upload.single('coverFile'),
+  async (req, res) => {
+    const configs = loadProjectConfigs();
+    const config = configs.find((p) => p.id === req.params.id);
+    if (!config) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const client = getSupabaseClient(config, req.headers.authorization as string | undefined);
+    if (!client) {
+      return res.status(400).json({ error: 'Supabase client not initialized' });
+    }
+
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: 'No cover image file provided' });
+    }
+
+    const table = config.tableName || 'songs';
+    const bucket = config.storageBucket || 'music';
+    const songId = req.params.songId;
+
+    try {
+      // 1. Fetch current song row to identify existing cover and column structure
+      let { data: existingRows } = await client.from(table).select('*').eq('id', songId).limit(1);
+      if (!existingRows || existingRows.length === 0) {
+        const fallback = await client.from(table).select('*').eq('file_name', songId).limit(1);
+        existingRows = fallback.data;
+      }
+      const existingSong = existingRows?.[0] || null;
+
+      // 2. Upload new cover artwork to storage
+      const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+      const cleanBase = existingSong?.file_name
+        ? path.parse(existingSong.file_name).name.replace(/[^a-zA-Z0-9._-]/g, '_')
+        : String(songId).replace(/[^a-zA-Z0-9._-]/g, '_');
+      const coverPath = `covers/${Date.now()}_${cleanBase}${ext}`;
+
+      const { error: uploadErr } = await client.storage
+        .from(bucket)
+        .upload(coverPath, file.buffer, {
+          contentType: file.mimetype || 'image/jpeg',
+          upsert: true,
+        });
+
+      if (uploadErr) {
+        throw new Error(`Cover upload failed: ${uploadErr.message}`);
+      }
+
+      // Compute public URL
+      const publicUrlData = client.storage.from(bucket).getPublicUrl(coverPath);
+      const coverPublicUrl =
+        publicUrlData.data?.publicUrl ||
+        `${config.url.replace(/\/+$/, '')}/storage/v1/object/public/${bucket}/${encodeURIComponent(coverPath)}`;
+
+      // 3. Update database row
+      const sampleCols = existingSong ? Object.keys(existingSong) : null;
+      const updates: Record<string, any> = {
+        cover_url: coverPublicUrl,
+      };
+      if (sampleCols && sampleCols.includes('image_url')) {
+        updates.image_url = coverPublicUrl;
+      }
+      if (sampleCols && sampleCols.includes('updated_at')) {
+        updates.updated_at = new Date().toISOString();
+      }
+
+      let { data: updated, error: updateErr } = await client
+        .from(table)
+        .update(updates)
+        .eq('id', songId)
+        .select();
+
+      if (updateErr || !updated || updated.length === 0) {
+        const fallback = await client.from(table).update(updates).eq('file_name', songId).select();
+        updated = fallback.data;
+      }
+
+      // 4. Safely clean up old cover if it was in this bucket
+      if (existingSong?.cover_url && existingSong.cover_url.includes(`/storage/v1/object/public/${bucket}/covers/`)) {
+        try {
+          const oldPath = existingSong.cover_url.split(`/storage/v1/object/public/${bucket}/`)[1];
+          if (oldPath && oldPath !== coverPath) {
+            await client.storage.from(bucket).remove([decodeURIComponent(oldPath)]).catch(() => {});
+          }
+        } catch {}
+      }
+
+      res.json({ success: true, cover_url: coverPublicUrl, song: updated?.[0] || existingSong });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to update cover artwork' });
+    }
+  }
+);
+
+// 6d. Replace Audio File (preserve metadata and cover artwork)
+app.post(
+  '/api/projects/:id/songs/:songId/replace-audio',
+  upload.single('audioFile'),
+  async (req, res) => {
+    const configs = loadProjectConfigs();
+    const config = configs.find((p) => p.id === req.params.id);
+    if (!config) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const client = getSupabaseClient(config, req.headers.authorization as string | undefined);
+    if (!client) {
+      return res.status(400).json({ error: 'Supabase client not initialized' });
+    }
+
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: 'No replacement audio file provided' });
+    }
+
+    const table = config.tableName || 'songs';
+    const bucket = config.storageBucket || 'music';
+    const songId = req.params.songId;
+
+    try {
+      // 1. Fetch current song row to preserve existing metadata
+      let { data: existingRows } = await client.from(table).select('*').eq('id', songId).limit(1);
+      if (!existingRows || existingRows.length === 0) {
+        const fallback = await client.from(table).select('*').eq('file_name', songId).limit(1);
+        existingRows = fallback.data;
+      }
+      const existingSong = existingRows?.[0] || null;
+
+      // 2. Upload replacement audio file
+      const sanitizedFilename = `${Date.now()}_${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+      const { error: uploadErr } = await client.storage
+        .from(bucket)
+        .upload(sanitizedFilename, file.buffer, {
+          contentType: file.mimetype || 'audio/mpeg',
+          upsert: false,
+        });
+
+      if (uploadErr) {
+        throw new Error(`Audio upload failed: ${uploadErr.message}`);
+      }
+
+      // Compute public URL with cache-busting timestamp so streaming apps and Android immediately refresh
+      const publicUrlData = client.storage.from(bucket).getPublicUrl(sanitizedFilename);
+      const publicUrl =
+        publicUrlData.data?.publicUrl ||
+        `${config.url.replace(/\/+$/, '')}/storage/v1/object/public/${bucket}/${encodeURIComponent(sanitizedFilename)}`;
+
+      const computedSha256 =
+        req.body.file_hash || crypto.createHash('sha256').update(file.buffer).digest('hex');
+      const duration = req.body.duration
+        ? parseFloat(req.body.duration)
+        : existingSong?.duration || 180;
+
+      // 3. Update database row, preserving title, artist, album, genre, and cover_url
+      const sampleCols = existingSong ? Object.keys(existingSong) : null;
+      const updates: Record<string, any> = {
+        file_name: file.originalname,
+        file_size: file.size,
+        audio_url: publicUrl,
+      };
+
+      if (!sampleCols || sampleCols.includes('public_url')) updates.public_url = publicUrl;
+      if (!sampleCols || sampleCols.includes('file_path')) updates.file_path = sanitizedFilename;
+      if (!sampleCols || sampleCols.includes('storage_path')) updates.storage_path = sanitizedFilename;
+      if (!sampleCols || sampleCols.includes('duration')) updates.duration = duration;
+      if (!sampleCols || sampleCols.includes('file_hash')) updates.file_hash = computedSha256;
+      if (sampleCols && sampleCols.includes('updated_at')) updates.updated_at = new Date().toISOString();
+
+      let { data: updated, error: updateErr } = await client
+        .from(table)
+        .update(updates)
+        .eq('id', songId)
+        .select();
+
+      if (updateErr || !updated || updated.length === 0) {
+        const fallback = await client.from(table).update(updates).eq('file_name', songId).select();
+        updated = fallback.data;
+      }
+
+      // 4. Safely remove previous audio file from storage if different
+      const oldStoragePath = existingSong?.storage_path || existingSong?.file_path || existingSong?.file_name;
+      if (oldStoragePath && oldStoragePath !== sanitizedFilename) {
+        await client.storage.from(bucket).remove([oldStoragePath]).catch(() => {});
+      }
+
+      res.json({
+        success: true,
+        message: `Replaced audio for '${existingSong?.title || file.originalname}'`,
+        song: updated?.[0] || { ...existingSong, ...updates },
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to replace audio file' });
+    }
+  }
+);
+
+// 6e. Delete Cloud Song (removes DB record, storage audio, and storage cover artwork)
+app.delete('/api/projects/:id/songs/:songId', async (req, res) => {
+  const configs = loadProjectConfigs();
+  const config = configs.find((p) => p.id === req.params.id);
+  if (!config) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  const client = getSupabaseClient(config, req.headers.authorization as string | undefined);
+  if (!client) {
+    return res.status(400).json({ error: 'Supabase client not initialized' });
+  }
+
+  const table = config.tableName || 'songs';
+  const bucket = config.storageBucket || 'music';
+  const songId = req.params.songId;
+
+  try {
+    // 1. Fetch song record to identify storage objects
+    let { data: existingRows } = await client.from(table).select('*').eq('id', songId).limit(1);
+    if (!existingRows || existingRows.length === 0) {
+      const fallback = await client.from(table).select('*').eq('file_name', songId).limit(1);
+      existingRows = fallback.data;
+    }
+    const song = existingRows?.[0] || null;
+
+    // 2. Remove audio file from storage
+    const filesToDelete: string[] = [];
+    if (song) {
+      if (song.storage_path) filesToDelete.push(song.storage_path);
+      else if (song.file_path) filesToDelete.push(song.file_path);
+      else if (song.file_name) filesToDelete.push(song.file_name);
+
+      // Check if cover artwork is stored in bucket
+      if (song.cover_url && song.cover_url.includes(`/storage/v1/object/public/${bucket}/`)) {
+        const coverObj = song.cover_url.split(`/storage/v1/object/public/${bucket}/`)[1];
+        if (coverObj) filesToDelete.push(decodeURIComponent(coverObj));
+      }
+    } else {
+      filesToDelete.push(songId);
+    }
+
+    if (filesToDelete.length > 0) {
+      const { error: storageErr } = await client.storage.from(bucket).remove(filesToDelete);
+      if (storageErr) {
+        console.warn('Storage deletion warning:', storageErr.message);
+      }
+    }
+
+    // 3. Remove row from database table
+    let { error: dbErr } = await client.from(table).delete().eq('id', songId);
+    if (dbErr) {
+      const fallback = await client.from(table).delete().eq('file_name', songId);
+      dbErr = fallback.error;
+    }
+    if (dbErr) {
+      throw new Error(`Database record deletion error: ${dbErr.message}`);
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully deleted song '${song?.title || songId}' from cloud database and storage.`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to delete cloud song' });
+  }
+});
+
 // 7. First-Phase Automated Live Verification Runner
 app.post('/api/projects/:id/run-self-test', async (req, res) => {
   const configs = loadProjectConfigs();

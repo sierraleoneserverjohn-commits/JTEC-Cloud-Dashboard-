@@ -1025,6 +1025,315 @@ export async function deleteAudioFile(projectId: string, fileName: string): Prom
 }
 
 /**
+ * Universal Song Metadata Updater (Title, Artist, Album, Genre, Duration)
+ */
+export async function updateSongMetadata(
+  projectId: string,
+  songId: string | number,
+  updates: {
+    title?: string;
+    artist?: string;
+    album?: string;
+    genre?: string;
+    duration?: number | string;
+  }
+): Promise<{ success: boolean; song: any }> {
+  // 1. Try local backend proxy first
+  try {
+    const res = await fetch(`/api/projects/${projectId}/songs/${encodeURIComponent(String(songId))}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {
+    // Fallback to client-side
+  }
+
+  // 2. Direct client-side Supabase
+  const configs = getStoredConfigs();
+  const config = configs.find((p) => p.id === projectId) || configs[0];
+  if (!config.url || !config.anonKey) {
+    throw new Error('Supabase credentials not configured for this project.');
+  }
+  const client = getBrowserSupabaseClient(projectId, config.url, config.anonKey);
+  if (!client) throw new Error('Could not initialize Supabase client.');
+
+  const table = config.tableName || 'songs';
+  const { data: sampleRow } = await client.from(table).select('*').limit(1);
+  const existingCols = sampleRow && sampleRow[0] ? Object.keys(sampleRow[0]) : null;
+
+  const dbUpdates: Record<string, any> = {};
+  if (updates.title !== undefined && (!existingCols || existingCols.includes('title'))) {
+    dbUpdates.title = updates.title.trim();
+  }
+  if (updates.artist !== undefined && (!existingCols || existingCols.includes('artist'))) {
+    dbUpdates.artist = updates.artist.trim();
+  }
+  if (updates.album !== undefined && (!existingCols || existingCols.includes('album'))) {
+    dbUpdates.album = updates.album.trim();
+  }
+  if (updates.genre !== undefined && (!existingCols || existingCols.includes('genre'))) {
+    dbUpdates.genre = updates.genre.trim();
+  }
+  if (updates.duration !== undefined && (!existingCols || existingCols.includes('duration'))) {
+    dbUpdates.duration = typeof updates.duration === 'number' ? updates.duration : parseInt(updates.duration, 10) || 180;
+  }
+  if (existingCols && existingCols.includes('updated_at')) {
+    dbUpdates.updated_at = new Date().toISOString();
+  }
+
+  let { data: updated, error: updateErr } = await client
+    .from(table)
+    .update(dbUpdates)
+    .eq('id', songId)
+    .select();
+
+  if (updateErr || !updated || updated.length === 0) {
+    const fallback = await client.from(table).update(dbUpdates).eq('file_name', songId).select();
+    if (fallback.error) throw new Error(fallback.error.message);
+    updated = fallback.data;
+  }
+
+  return { success: true, song: updated?.[0] || dbUpdates };
+}
+
+/**
+ * Universal Add or Replace Cover Artwork
+ */
+export async function updateSongCover(
+  projectId: string,
+  songId: string | number,
+  coverFile: File,
+  oldCoverUrl?: string
+): Promise<{ success: boolean; cover_url: string; song: any }> {
+  // 1. Try local backend proxy first
+  try {
+    const formData = new FormData();
+    formData.append('coverFile', coverFile);
+    const res = await fetch(`/api/projects/${projectId}/songs/${encodeURIComponent(String(songId))}/cover`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {
+    // Fallback to client-side
+  }
+
+  // 2. Direct client-side Supabase
+  const configs = getStoredConfigs();
+  const config = configs.find((p) => p.id === projectId) || configs[0];
+  if (!config.url || !config.anonKey) throw new Error('Supabase credentials not configured.');
+  const client = getBrowserSupabaseClient(projectId, config.url, config.anonKey);
+  if (!client) throw new Error('Could not initialize Supabase client.');
+
+  const bucket = config.storageBucket || 'music';
+  const table = config.tableName || 'songs';
+  const ext = coverFile.name.split('.').pop() || 'jpg';
+  const cleanBase = String(songId).replace(/[^a-zA-Z0-9._-]/g, '_');
+  const coverPath = `covers/${Date.now()}_${cleanBase}.${ext}`;
+
+  const { error: uploadErr } = await client.storage
+    .from(bucket)
+    .upload(coverPath, coverFile, {
+      contentType: coverFile.type || 'image/jpeg',
+      upsert: true,
+    });
+
+  if (uploadErr) throw new Error(`Cover upload failed: ${uploadErr.message}`);
+
+  const publicUrl = client.storage.from(bucket).getPublicUrl(coverPath).data?.publicUrl ||
+    `${config.url.replace(/\/+$/, '')}/storage/v1/object/public/${bucket}/${encodeURIComponent(coverPath)}`;
+
+  const dbUpdates: Record<string, any> = { cover_url: publicUrl };
+  const { data: sampleRow } = await client.from(table).select('*').limit(1);
+  const existingCols = sampleRow && sampleRow[0] ? Object.keys(sampleRow[0]) : null;
+  if (existingCols && existingCols.includes('image_url')) dbUpdates.image_url = publicUrl;
+  if (existingCols && existingCols.includes('updated_at')) dbUpdates.updated_at = new Date().toISOString();
+
+  let { data: updated, error: updateErr } = await client.from(table).update(dbUpdates).eq('id', songId).select();
+  if (updateErr || !updated || updated.length === 0) {
+    const fallback = await client.from(table).update(dbUpdates).eq('file_name', songId).select();
+    updated = fallback.data;
+  }
+
+  // Clean old cover if in bucket
+  if (oldCoverUrl && oldCoverUrl.includes(`/storage/v1/object/public/${bucket}/covers/`)) {
+    try {
+      const oldObj = oldCoverUrl.split(`/storage/v1/object/public/${bucket}/`)[1];
+      if (oldObj && oldObj !== coverPath) {
+        await client.storage.from(bucket).remove([decodeURIComponent(oldObj)]).catch(() => {});
+      }
+    } catch {}
+  }
+
+  return { success: true, cover_url: publicUrl, song: updated?.[0] };
+}
+
+/**
+ * Universal Replace Audio File (preserves metadata and artwork)
+ */
+export async function replaceSongAudio(
+  projectId: string,
+  songId: string | number,
+  newAudioFile: File,
+  metadata?: {
+    duration?: number;
+    file_hash?: string;
+  }
+): Promise<{ success: boolean; song: any }> {
+  // 1. Try local backend proxy first
+  try {
+    const formData = new FormData();
+    formData.append('audioFile', newAudioFile);
+    if (metadata?.duration) formData.append('duration', String(metadata.duration));
+    if (metadata?.file_hash) formData.append('file_hash', metadata.file_hash);
+
+    const res = await fetch(`/api/projects/${projectId}/songs/${encodeURIComponent(String(songId))}/replace-audio`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {
+    // Fallback to client-side
+  }
+
+  // 2. Direct client-side Supabase
+  const configs = getStoredConfigs();
+  const config = configs.find((p) => p.id === projectId) || configs[0];
+  if (!config.url || !config.anonKey) throw new Error('Supabase credentials not configured.');
+  const client = getBrowserSupabaseClient(projectId, config.url, config.anonKey);
+  if (!client) throw new Error('Could not initialize Supabase client.');
+
+  const bucket = config.storageBucket || 'music';
+  const table = config.tableName || 'songs';
+
+  // Fetch current song row to preserve title, artist, album, genre, cover
+  let { data: existingRows } = await client.from(table).select('*').eq('id', songId).limit(1);
+  if (!existingRows || existingRows.length === 0) {
+    const fallback = await client.from(table).select('*').eq('file_name', songId).limit(1);
+    existingRows = fallback.data;
+  }
+  const existingSong = existingRows?.[0] || null;
+
+  const cleanName = newAudioFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const filePath = `${Date.now()}_${cleanName}`;
+
+  const { error: uploadErr } = await client.storage
+    .from(bucket)
+    .upload(filePath, newAudioFile, {
+      contentType: newAudioFile.type || 'audio/mpeg',
+      upsert: false,
+    });
+
+  if (uploadErr) throw new Error(`Audio upload failed: ${uploadErr.message}`);
+
+  const publicUrl = client.storage.from(bucket).getPublicUrl(filePath).data?.publicUrl ||
+    `${config.url.replace(/\/+$/, '')}/storage/v1/object/public/${bucket}/${encodeURIComponent(filePath)}`;
+
+  const { data: sampleRow } = await client.from(table).select('*').limit(1);
+  const existingCols = sampleRow && sampleRow[0] ? Object.keys(sampleRow[0]) : null;
+
+  const dbUpdates: Record<string, any> = {
+    file_name: newAudioFile.name,
+    file_size: newAudioFile.size,
+    audio_url: publicUrl,
+  };
+  if (!existingCols || existingCols.includes('public_url')) dbUpdates.public_url = publicUrl;
+  if (!existingCols || existingCols.includes('file_path')) dbUpdates.file_path = filePath;
+  if (!existingCols || existingCols.includes('storage_path')) dbUpdates.storage_path = filePath;
+  if (metadata?.duration) dbUpdates.duration = metadata.duration;
+  if (metadata?.file_hash) dbUpdates.file_hash = metadata.file_hash;
+  if (existingCols && existingCols.includes('updated_at')) dbUpdates.updated_at = new Date().toISOString();
+
+  let { data: updated, error: updateErr } = await client.from(table).update(dbUpdates).eq('id', songId).select();
+  if (updateErr || !updated || updated.length === 0) {
+    const fallback = await client.from(table).update(dbUpdates).eq('file_name', songId).select();
+    updated = fallback.data;
+  }
+
+  // Remove old audio file from storage if different
+  const oldStoragePath = existingSong?.storage_path || existingSong?.file_path || existingSong?.file_name;
+  if (oldStoragePath && oldStoragePath !== filePath) {
+    await client.storage.from(bucket).remove([oldStoragePath]).catch(() => {});
+  }
+
+  return { success: true, song: updated?.[0] || dbUpdates };
+}
+
+/**
+ * Universal Delete Cloud Song (removes DB record, storage audio, and storage cover artwork)
+ */
+export async function deleteCloudSong(projectId: string, song: SongMetadataItem): Promise<boolean> {
+  let backendAttempted = false;
+  // 1. Try local backend proxy first
+  try {
+    const songKey = song.id ? String(song.id) : song.file_name;
+    const res = await fetch(`/api/projects/${projectId}/songs/${encodeURIComponent(songKey)}`, {
+      method: 'DELETE',
+    });
+    backendAttempted = true;
+    if (res.ok) return true;
+    const errData = await res.json().catch(() => null);
+    if (errData?.error) {
+      throw new Error(errData.error);
+    }
+  } catch (err: any) {
+    if (backendAttempted) {
+      // Backend was reached and reported an explicit deletion error
+      throw err;
+    }
+    // Fallback to client-side (e.g. static Android APK / GitHub Pages)
+  }
+
+  // 2. Direct client-side Supabase
+  const configs = getStoredConfigs();
+  const config = configs.find((p) => p.id === projectId) || configs[0];
+  if (!config.url || !config.anonKey) throw new Error('Supabase credentials not configured.');
+  const client = getBrowserSupabaseClient(projectId, config.url, config.anonKey);
+  if (!client) throw new Error('Could not initialize Supabase client.');
+
+  const bucket = config.storageBucket || 'music';
+  const table = config.tableName || 'songs';
+
+  // 1. Remove database record first
+  let dbErr: any = null;
+  if (song.id !== undefined && song.id !== null) {
+    const res = await client.from(table).delete().eq('id', song.id);
+    dbErr = res.error;
+  }
+  if (dbErr && song.file_name) {
+    const fallback = await client.from(table).delete().eq('file_name', song.file_name);
+    dbErr = fallback.error;
+  }
+  if (dbErr) {
+    throw new Error(`Database record deletion error: ${dbErr.message}`);
+  }
+
+  // 2. Remove audio and cover from storage bucket
+  const filesToDelete: string[] = [];
+  if (song.storage_path) filesToDelete.push(song.storage_path);
+  if (song.file_name && !filesToDelete.includes(song.file_name)) filesToDelete.push(song.file_name);
+
+  if (song.cover_url && song.cover_url.includes(`/storage/v1/object/public/${bucket}/`)) {
+    const coverObj = song.cover_url.split(`/storage/v1/object/public/${bucket}/`)[1];
+    if (coverObj) filesToDelete.push(decodeURIComponent(coverObj));
+  }
+
+  if (filesToDelete.length > 0) {
+    await client.storage.from(bucket).remove(filesToDelete).catch(() => {});
+  }
+
+  return true;
+}
+
+/**
  * Universal Phase 1 Self-Test (client-side execution for GitHub Pages)
  */
 export async function runSelfTestClientSide(projectId: string): Promise<{

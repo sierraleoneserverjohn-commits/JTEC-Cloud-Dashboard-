@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import type { ProjectDetails, AudioFileItem, SongMetadataItem } from '../types/dashboard';
 import { StorageMeter } from './StorageMeter';
+import { CloudMusicManager } from './CloudMusicManager';
 import { fetchProjectDetails, deleteAudioFile } from '../services/dashboardService';
 import { resolveProjectLogo } from '../assets/logos';
 
@@ -32,6 +33,7 @@ interface ProjectDetailsModalProps {
   onOpenTest: () => void;
   onOpenUpload: () => void;
   isAdminMode: boolean;
+  onProjectUpdated?: () => void;
 }
 
 export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
@@ -41,14 +43,48 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
   onOpenTest,
   onOpenUpload,
   isAdminMode,
+  onProjectUpdated,
 }) => {
   const [details, setDetails] = useState<ProjectDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'files' | 'catalog' | 'activity' | 'telemetry'>('files');
+  const [activeTab, setActiveTab] = useState<'catalog' | 'files' | 'activity' | 'telemetry'>('catalog');
   const [playingUrl, setPlayingUrl] = useState<string | null>(null);
   const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
+
+  const handleSongDeleted = (deletedSong: SongMetadataItem) => {
+    setDetails((prev) => {
+      if (!prev) return prev;
+      const targetKey = String(deletedSong.id);
+      const updatedSongs = prev.songs.filter(
+        (s) => String(s.id) !== targetKey && s.file_name !== deletedSong.file_name
+      );
+      const removedBytes = deletedSong.file_size || 0;
+      const newTotalBytes = Math.max(0, (prev.audioTotalBytes || 0) - removedBytes);
+      const newTotalMB = (newTotalBytes / (1024 * 1024)).toFixed(2);
+      const newTotalGB = (newTotalBytes / (1024 * 1024 * 1024)).toFixed(3);
+      const newPercent = prev.storageQuotaBytes
+        ? Math.min(100, Math.round((newTotalBytes / prev.storageQuotaBytes) * 100))
+        : null;
+      const updatedFiles = prev.files.filter(
+        (f) => f.name !== deletedSong.file_name && f.name !== deletedSong.storage_path
+      );
+      return {
+        ...prev,
+        songs: updatedSongs,
+        files: updatedFiles,
+        audioFileCount: updatedSongs.length,
+        audioTotalBytes: newTotalBytes,
+        storageUsedMB: newTotalMB,
+        storageUsedGB: newTotalGB,
+        percentUsed: newPercent,
+      };
+    });
+    if (onProjectUpdated) {
+      onProjectUpdated();
+    }
+  };
 
   const fetchDetails = async () => {
     try {
@@ -148,12 +184,12 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
           onClose();
         }
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm sm:p-3 md:p-6 overflow-y-auto safe-top safe-bottom p-0 sm:p-3"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm sm:p-3 md:p-6 p-0 safe-top safe-bottom"
     >
-      <div className="relative w-full max-w-5xl h-full sm:h-auto sm:max-h-[92dvh] flex flex-col min-h-0 rounded-none sm:rounded-2xl border-0 sm:border border-neutral-800 bg-neutral-950 text-neutral-100 shadow-2xl overflow-hidden">
+      <div className="relative w-full max-w-5xl h-full sm:max-h-[92dvh] flex flex-col min-h-0 rounded-none sm:rounded-2xl border-0 sm:border border-neutral-800 bg-neutral-950 text-neutral-100 shadow-2xl overflow-hidden">
         
-        {/* Navigation Breadcrumb & Back Bar */}
-        <div className="shrink-0 border-b border-neutral-800/80 bg-neutral-900/80 backdrop-blur-md px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2 sm:gap-3">
+        {/* Navigation Breadcrumb & Back Bar (Pinned at top) */}
+        <div className="shrink-0 border-b border-neutral-800/80 bg-neutral-900/95 backdrop-blur-md px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2 sm:gap-3 z-30">
           <div className="flex items-center gap-2 text-xs">
             <button
               type="button"
@@ -178,7 +214,7 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
               disabled={refreshing}
               title="Refresh real metrics"
               aria-label="Refresh metrics"
-              className="rounded-lg border border-neutral-800 bg-neutral-900 p-2 text-neutral-400 hover:text-white transition-colors disabled:opacity-50 min-h-[44px] min-w-[44px] flex items-center justify-center"
+              className="rounded-lg border border-neutral-800 bg-neutral-900 p-2 text-neutral-400 hover:text-white transition-colors disabled:opacity-50 min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
             >
               <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin text-white' : ''}`} />
             </button>
@@ -186,7 +222,7 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
               onClick={onOpenConfig}
               title="Configure project credentials"
               aria-label="Configure project"
-              className="rounded-lg border border-neutral-800 bg-neutral-900 p-2 text-neutral-400 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
+              className="rounded-lg border border-neutral-800 bg-neutral-900 p-2 text-neutral-400 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
             >
               <Settings2 className="h-4 w-4" />
             </button>
@@ -194,15 +230,17 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
               onClick={onClose}
               title="Close panel (Esc)"
               aria-label="Close"
-              className="rounded-lg border border-neutral-800 bg-neutral-900 p-2 text-neutral-400 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
+              className="rounded-lg border border-neutral-800 bg-neutral-900 p-2 text-neutral-400 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
         </div>
 
-        {/* Project Profile Header */}
-        <div className="shrink-0 border-b border-neutral-800/80 bg-neutral-950 p-4 sm:p-6">
+        {/* Single Natural Scroll Container for Entire Modal Content */}
+        <div className="flex-1 overflow-y-auto overscroll-contain bg-neutral-950 touch-scroll">
+          {/* Project Profile Header */}
+          <div className="border-b border-neutral-800/80 bg-neutral-950 p-4 sm:p-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3.5">
               <div className="relative h-12 w-12 sm:h-14 sm:w-14 shrink-0 overflow-hidden rounded-xl border border-neutral-800 bg-neutral-900">
@@ -334,56 +372,60 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
               error={details.error}
             />
           </div>
-        </div>
-
-        {/* Tab Controls (Horizontally scrollable with clean padding) */}
-        <div className="shrink-0 border-b border-neutral-800 bg-neutral-950 px-3 sm:px-6 pt-2 pb-2">
-          <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar py-0.5">
-            <button
-              onClick={() => setActiveTab('files')}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap min-h-[36px] ${
-                activeTab === 'files'
-                  ? 'bg-neutral-800 text-white'
-                  : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
-              }`}
-            >
-              Storage Objects ({details.files.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('catalog')}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap min-h-[36px] ${
-                activeTab === 'catalog'
-                  ? 'bg-neutral-800 text-white'
-                  : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
-              }`}
-            >
-              Song Catalog Database ({details.songs.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('activity')}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap min-h-[36px] ${
-                activeTab === 'activity'
-                  ? 'bg-neutral-800 text-white'
-                  : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
-              }`}
-            >
-              Upload Activity ({details.recentUploads.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('telemetry')}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap min-h-[36px] ${
-                activeTab === 'telemetry'
-                  ? 'bg-neutral-800 text-white'
-                  : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
-              }`}
-            >
-              Management API Telemetry
-            </button>
           </div>
-        </div>
 
-        {/* Tab Contents (Full normal scrolling with bottom padding) */}
-        <div className="flex-1 overflow-y-auto p-3 sm:p-6 pb-24 sm:pb-8 touch-scroll bg-neutral-950">
+          {/* Sticky Tab Controls Bar (Pinned when scrolling through song catalog) */}
+          <div className="sticky top-0 z-20 border-b border-neutral-800/90 bg-neutral-950/95 backdrop-blur-md px-3 sm:px-6 py-2.5 shadow-sm">
+            <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar py-0.5">
+              <button
+                type="button"
+                onClick={() => setActiveTab('catalog')}
+                className={`rounded-lg px-3.5 py-2 text-xs font-medium transition-colors whitespace-nowrap min-h-[38px] cursor-pointer ${
+                  activeTab === 'catalog'
+                    ? 'bg-neutral-800 text-white font-semibold shadow-sm border border-neutral-700/60'
+                    : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
+                }`}
+              >
+                Cloud Music Library ({details.songs.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('files')}
+                className={`rounded-lg px-3.5 py-2 text-xs font-medium transition-colors whitespace-nowrap min-h-[38px] cursor-pointer ${
+                  activeTab === 'files'
+                    ? 'bg-neutral-800 text-white font-semibold shadow-sm border border-neutral-700/60'
+                    : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
+                }`}
+              >
+                Storage Objects ({details.files.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('activity')}
+                className={`rounded-lg px-3.5 py-2 text-xs font-medium transition-colors whitespace-nowrap min-h-[38px] cursor-pointer ${
+                  activeTab === 'activity'
+                    ? 'bg-neutral-800 text-white font-semibold shadow-sm border border-neutral-700/60'
+                    : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
+                }`}
+              >
+                Upload Activity ({details.recentUploads.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('telemetry')}
+                className={`rounded-lg px-3.5 py-2 text-xs font-medium transition-colors whitespace-nowrap min-h-[38px] cursor-pointer ${
+                  activeTab === 'telemetry'
+                    ? 'bg-neutral-800 text-white font-semibold shadow-sm border border-neutral-700/60'
+                    : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200'
+                }`}
+              >
+                Management API Telemetry
+              </button>
+            </div>
+          </div>
+
+          {/* Tab Contents: Single natural layout with safe bottom spacing */}
+          <div className="p-3 sm:p-6 pb-28 sm:pb-12 bg-neutral-950 min-h-[300px]">
           
           {/* TAB 1: Storage Bucket Objects */}
           {activeTab === 'files' && (
@@ -535,101 +577,20 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
             </div>
           )}
 
-          {/* TAB 2: Song Catalog Database Table */}
+          {/* TAB 2: Complete Cloud Music Library & Song Manager */}
           {activeTab === 'catalog' && (
-            <div>
-              {details.songs.length === 0 ? (
-                <div className="rounded-xl border border-neutral-800/80 bg-neutral-900/30 p-8 text-center">
-                  <Database className="mx-auto h-8 w-8 text-neutral-600" />
-                  <p className="mt-2 text-xs font-medium text-neutral-300">
-                    No records found in table '{details.tableName}'
-                  </p>
-                  <p className="mt-1 text-[11px] text-neutral-500">
-                    Uploaded songs and their metadata will appear here.
-                  </p>
-                </div>
-              ) : (
-                <div>
-                  {/* Desktop Table View */}
-                  <div className="hidden sm:block divide-y divide-neutral-900 border border-neutral-800 rounded-xl overflow-hidden bg-neutral-900/40">
-                    <div className="grid grid-cols-12 bg-neutral-900/80 px-4 py-2.5 text-[11px] font-medium text-neutral-400">
-                      <span className="col-span-5">Title</span>
-                      <span className="col-span-4">Artist</span>
-                      <span className="col-span-3 text-right">Recorded Date</span>
-                    </div>
-                    {details.songs.map((song) => (
-                      <div
-                        key={song.id}
-                        className="grid grid-cols-12 items-center px-4 py-2.5 text-xs hover:bg-neutral-900/70 transition-colors"
-                      >
-                        <div className="col-span-5 font-semibold text-white truncate pr-2 flex items-center gap-2.5">
-                          <div className="h-8 w-8 rounded-lg overflow-hidden shrink-0 border border-neutral-800 bg-neutral-950 flex items-center justify-center">
-                            {song.cover_url ? (
-                              <img
-                                src={song.cover_url}
-                                alt={song.title}
-                                className="h-full w-full object-cover"
-                              />
-                            ) : (
-                              <img
-                                src={resolveProjectLogo(details.id, details.logo)}
-                                alt={song.title}
-                                className="h-full w-full object-cover opacity-70"
-                              />
-                            )}
-                          </div>
-                          <span className="truncate">{song.title}</span>
-                        </div>
-                        <div className="col-span-4 text-neutral-400 truncate pr-2">
-                          {song.artist || 'Unknown'}
-                        </div>
-                        <div className="col-span-3 text-right font-mono text-[11px] text-neutral-400">
-                          {new Date(song.created_at).toLocaleDateString()}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Mobile Stacked Card View */}
-                  <div className="sm:hidden space-y-2">
-                    {details.songs.map((song) => (
-                      <div
-                        key={song.id}
-                        className="rounded-lg border border-neutral-800/80 bg-neutral-900/60 p-3 space-y-2 text-xs"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="h-10 w-10 rounded-lg overflow-hidden shrink-0 border border-neutral-800 bg-neutral-950 flex items-center justify-center">
-                            {song.cover_url ? (
-                              <img
-                                src={song.cover_url}
-                                alt={song.title}
-                                className="h-full w-full object-cover"
-                              />
-                            ) : (
-                              <img
-                                src={resolveProjectLogo(details.id, details.logo)}
-                                alt={song.title}
-                                className="h-full w-full object-cover opacity-70"
-                              />
-                            )}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="font-semibold text-white leading-snug truncate">{song.title}</p>
-                            <p className="text-neutral-400 text-[11px] truncate">
-                              {song.artist || 'Unknown Artist'} {song.album ? `· ${song.album}` : ''}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between pt-1 border-t border-neutral-800/60 text-[10px] text-neutral-500 font-mono">
-                          <span className="truncate max-w-[180px]">{song.file_name}</span>
-                          <span>{new Date(song.created_at).toLocaleDateString()}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+            <CloudMusicManager
+              projectId={details.id}
+              projectName={details.name}
+              storageBucket={details.storageBucket}
+              tableName={details.tableName}
+              projectLogo={details.logo}
+              songs={details.songs}
+              isAdminMode={isAdminMode}
+              onRefresh={fetchDetails}
+              onOpenUpload={onOpenUpload}
+              onSongDeleted={handleSongDeleted}
+            />
           )}
 
           {/* TAB 3: Recent Upload Activity */}
@@ -716,9 +677,10 @@ export const ProjectDetailsModal: React.FC<ProjectDetailsModalProps> = ({
             </div>
           )}
         </div>
+      </div>
 
         {/* Sticky Mobile Bottom Bar with Visible Back to Dashboard Button */}
-        <div className="sm:hidden shrink-0 border-t border-neutral-800/90 bg-neutral-950/95 p-3 flex items-center justify-between gap-3 safe-bottom">
+        <div className="sm:hidden shrink-0 border-t border-neutral-800/90 bg-neutral-950/98 px-3.5 py-2.5 flex items-center justify-between gap-3 safe-bottom z-30">
           <button
             type="button"
             onClick={onClose}

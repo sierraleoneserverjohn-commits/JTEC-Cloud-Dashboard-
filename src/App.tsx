@@ -425,6 +425,7 @@ export default function App() {
           onOpenConfig={() => navigateTo(`config=${selectedProjectId}`)}
           onOpenTest={() => navigateTo(`diagnostics=${selectedProjectId}`)}
           onOpenUpload={() => navigateTo('upload')}
+          onProjectUpdated={() => fetchProjects()}
         />
       )}
 
