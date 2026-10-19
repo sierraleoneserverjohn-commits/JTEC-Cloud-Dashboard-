@@ -698,14 +698,17 @@ export async function saveProjectConfig(
  * Universal connection diagnostic tester
  */
 export async function testProjectConnection(projectId: string): Promise<ConnectionTestResult> {
-  // 1. Try local backend first
+  // 1. Try local backend first with safe content-type inspection
   try {
     const res = await fetch(`/api/projects/${projectId}/test-connection`, {
       method: 'POST',
     });
     if (res.ok) {
-      const data = await res.json();
-      return data;
+      const contentType = res.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        const data = await res.json();
+        return data;
+      }
     }
   } catch {}
 
@@ -867,57 +870,8 @@ export async function uploadAudioFile(
     throw new Error('Could not initialize Supabase client.');
   }
 
-  // Check active administrator session
-  const sessionRes = await client.auth.getSession();
-  const authToken = sessionRes.data?.session?.access_token;
-
-  // 1. Try local backend first (if server is running)
-  try {
-    const formData = new FormData();
-    formData.append('audioFile', file);
-    formData.append('title', metadata.title);
-    formData.append('artist', metadata.artist);
-    formData.append('album', metadata.album);
-    formData.append('genre', metadata.genre);
-    formData.append('duration', metadata.duration);
-    if (metadata.coverFile) {
-      formData.append('coverFile', metadata.coverFile);
-    }
-    if (metadata.file_hash) {
-      formData.append('file_hash', metadata.file_hash);
-    }
-    if (metadata.allowDuplicate) {
-      formData.append('allowDuplicate', 'true');
-    }
-
-    const headers: Record<string, string> = {};
-    if (authToken) {
-      headers['Authorization'] = `Bearer ${authToken}`;
-    }
-
-    const res = await fetch(`/api/projects/${projectId}/upload`, {
-      method: 'POST',
-      headers,
-      body: formData,
-    });
-    if (res.ok) {
-      const data = await res.json();
-      return { success: true, song: data.song };
-    } else {
-      const errJson = await res.json().catch(() => null);
-      if (errJson?.error && !errJson.error.includes('Cannot POST') && !errJson.error.includes('Not Found')) {
-        throw new Error(errJson.error);
-      }
-    }
-  } catch (err: any) {
-    if (err.message && !err.message.includes('Failed to fetch') && !err.message.includes('NetworkError') && !err.message.includes('Load failed')) {
-      throw err;
-    }
-    // Fallback to direct client-side Supabase execution (static GitHub Pages mode)
-  }
-
-  // 2. Direct client-side Supabase upload for GitHub Pages
-  const bucket = config.storageBucket || 'music';
+  // 1. Upload directly to project's configured Supabase Storage bucket
+  const bucket = config.storageBucket || (projectId === 'nasheed' ? 'nasheed-audio' : 'music');
   const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const filePath = `${Date.now()}_${cleanName}`;
   let coverPath: string | null = null;
