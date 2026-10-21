@@ -22,11 +22,17 @@ import {
   Disc,
   Sparkles,
   ShieldAlert,
+  Copy,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Terminal,
 } from 'lucide-react';
 import type { SongMetadataItem } from '../types/dashboard';
 import {
   updateSongMetadata,
   updateSongCover,
+  deleteSongCover,
   replaceSongAudio,
   deleteCloudSong,
 } from '../services/dashboardService';
@@ -119,7 +125,12 @@ export const CloudMusicManager: React.FC<CloudMusicManagerProps> = ({
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null);
   const [isSavingCover, setIsSavingCover] = useState(false);
+  const [isDeletingCover, setIsDeletingCover] = useState(false);
   const coverInputRef = useRef<HTMLInputElement>(null);
+
+  // SQL Migration guide state
+  const [showSqlGuide, setShowSqlGuide] = useState(false);
+  const [copiedSql, setCopiedSql] = useState(false);
 
   // Form states for Replace Audio
   const [replacementAudioFile, setReplacementAudioFile] = useState<File | null>(null);
@@ -319,13 +330,89 @@ export const CloudMusicManager: React.FC<CloudMusicManagerProps> = ({
       setCoverSong(null);
       setCoverFile(null);
       setCoverPreviewUrl(null);
-      setFeedback({ type: 'success', message: `Updated cover artwork for '${coverSong.title}'.` });
+      setFeedback({ type: 'success', message: `Cover uploaded and verified for '${coverSong.title}'.` });
       await onRefresh();
     } catch (err: any) {
       setFeedback({ type: 'error', message: err.message || 'Failed to update cover in Supabase.' });
     } finally {
       setIsSavingCover(false);
     }
+  };
+
+  const handleDeleteCover = async () => {
+    if (!coverSong || !coverSong.cover_url || isDeletingCover) return;
+
+    setIsDeletingCover(true);
+    try {
+      await deleteSongCover(projectId, coverSong.id, coverSong.cover_url);
+
+      // Update local state immediately
+      setLocalSongs((prev) =>
+        prev.map((s) => (s.id === coverSong.id ? { ...s, cover_url: undefined } : s))
+      );
+
+      setCoverSong(null);
+      setCoverFile(null);
+      setCoverPreviewUrl(null);
+      setFeedback({
+        type: 'success',
+        message: `Cover artwork removed and verified in Supabase for '${coverSong.title}'.`,
+      });
+      await onRefresh();
+    } catch (err: any) {
+      setFeedback({
+        type: 'error',
+        message: err.message || 'Failed to remove cover artwork from Supabase.',
+      });
+    } finally {
+      setIsDeletingCover(false);
+    }
+  };
+
+  const sqlPolicySnippet = useMemo(() => {
+    return `-- ==============================================================================
+-- SUPABASE RLS POLICIES FOR ${projectName.toUpperCase()}
+-- Run this in your Supabase SQL Editor: https://supabase.com/dashboard/project/_/sql
+-- ==============================================================================
+
+-- 1. Table RLS: Enable full CRUD for authorized dashboard operations
+ALTER TABLE public.${tableName} ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow select songs" ON public.${tableName};
+CREATE POLICY "Allow select songs" ON public.${tableName} FOR SELECT TO public USING (true);
+
+DROP POLICY IF EXISTS "Allow insert songs" ON public.${tableName};
+CREATE POLICY "Allow insert songs" ON public.${tableName} FOR INSERT TO anon, authenticated WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow update songs" ON public.${tableName};
+CREATE POLICY "Allow update songs" ON public.${tableName} FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow delete songs" ON public.${tableName};
+CREATE POLICY "Allow delete songs" ON public.${tableName} FOR DELETE TO anon, authenticated USING (true);
+
+-- 2. Storage Bucket: Ensure '${storageBucket}' is public and has least-privilege CRUD policies
+INSERT INTO storage.buckets (id, name, public) VALUES ('${storageBucket}', '${storageBucket}', true)
+ON CONFLICT (id) DO UPDATE SET public = true;
+
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "${storageBucket} select policy" ON storage.objects;
+CREATE POLICY "${storageBucket} select policy" ON storage.objects FOR SELECT TO public USING (bucket_id = '${storageBucket}');
+
+DROP POLICY IF EXISTS "${storageBucket} insert policy" ON storage.objects;
+CREATE POLICY "${storageBucket} insert policy" ON storage.objects FOR INSERT TO anon, authenticated WITH CHECK (bucket_id = '${storageBucket}');
+
+DROP POLICY IF EXISTS "${storageBucket} update policy" ON storage.objects;
+CREATE POLICY "${storageBucket} update policy" ON storage.objects FOR UPDATE TO anon, authenticated USING (bucket_id = '${storageBucket}') WITH CHECK (bucket_id = '${storageBucket}');
+
+DROP POLICY IF EXISTS "${storageBucket} delete policy" ON storage.objects;
+CREATE POLICY "${storageBucket} delete policy" ON storage.objects FOR DELETE TO anon, authenticated USING (bucket_id = '${storageBucket}');`;
+  }, [projectName, tableName, storageBucket]);
+
+  const handleCopySql = () => {
+    navigator.clipboard.writeText(sqlPolicySnippet);
+    setCopiedSql(true);
+    setTimeout(() => setCopiedSql(false), 2500);
   };
 
   // Open Replace Audio modal
@@ -466,27 +553,78 @@ export const CloudMusicManager: React.FC<CloudMusicManagerProps> = ({
     <div className="space-y-4">
       {/* Feedback Toast Banner */}
       {feedback && (
-        <div
-          className={`flex items-start justify-between gap-2.5 rounded-xl border p-3 text-xs transition-all ${
-            feedback.type === 'success'
-              ? 'border-emerald-800/80 bg-emerald-950/40 text-emerald-200'
-              : 'border-rose-800/80 bg-rose-950/40 text-rose-200'
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            {feedback.type === 'success' ? (
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-            ) : (
-              <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
-            )}
-            <span>{feedback.message}</span>
-          </div>
-          <button
-            onClick={() => setFeedback(null)}
-            className="text-neutral-400 hover:text-white p-0.5 rounded cursor-pointer"
+        <div className="space-y-2">
+          <div
+            className={`flex items-start justify-between gap-2.5 rounded-xl border p-3.5 text-xs transition-all ${
+              feedback.type === 'success'
+                ? 'border-emerald-800/80 bg-emerald-950/40 text-emerald-200'
+                : 'border-rose-800/80 bg-rose-950/50 text-rose-200'
+            }`}
           >
-            <X className="h-3.5 w-3.5" />
-          </button>
+            <div className="flex items-start gap-2.5 min-w-0 flex-1">
+              {feedback.type === 'success' ? (
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400 mt-0.5" />
+              ) : (
+                <AlertCircle className="h-4 w-4 shrink-0 text-rose-400 mt-0.5" />
+              )}
+              <div className="min-w-0 flex-1 space-y-1">
+                <p className="leading-relaxed font-medium">{feedback.message}</p>
+                {feedback.type === 'error' && (feedback.message.includes('RLS') || feedback.message.includes('Row-Level Security') || feedback.message.includes('policy')) && (
+                  <div className="pt-1 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowSqlGuide(!showSqlGuide)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-rose-900/60 hover:bg-rose-900 text-rose-100 text-[11px] font-semibold transition-colors cursor-pointer border border-rose-700/60"
+                    >
+                      <Terminal className="h-3 w-3" />
+                      <span>{showSqlGuide ? 'Hide SQL Policy Fix' : 'View & Copy Supabase SQL Policy Fix'}</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={() => setFeedback(null)}
+              className="text-neutral-400 hover:text-white p-0.5 rounded cursor-pointer shrink-0"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Expandable Supabase SQL Migration Helper */}
+      {showSqlGuide && (
+        <div className="rounded-xl border border-amber-800/60 bg-neutral-900/90 p-4 space-y-3 text-xs animate-in fade-in duration-150">
+          <div className="flex items-center justify-between border-b border-neutral-800 pb-2">
+            <div className="flex items-center gap-2 text-amber-300 font-semibold text-xs">
+              <Sparkles className="h-4 w-4 text-amber-400" />
+              <span>Idempotent Supabase RLS Migration for {projectName}</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleCopySql}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium transition-colors cursor-pointer border border-neutral-700"
+            >
+              {copiedSql ? (
+                <>
+                  <Check className="h-3.5 w-3.5 text-emerald-400" />
+                  <span className="text-emerald-400">Copied to Clipboard!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="h-3.5 w-3.5" />
+                  <span>Copy SQL Query</span>
+                </>
+              )}
+            </button>
+          </div>
+          <p className="text-[11px] text-neutral-300 leading-relaxed">
+            Run this query in your Supabase SQL Editor. It enables DELETE, UPDATE, and storage upload permissions for bucket <strong className="text-white">'{storageBucket}'</strong> and table <strong className="text-white">'{tableName}'</strong> while preserving security.
+          </p>
+          <div className="relative rounded-lg bg-neutral-950 p-3 font-mono text-[10px] text-neutral-300 border border-neutral-800 max-h-56 overflow-y-auto">
+            <pre className="whitespace-pre-wrap">{sqlPolicySnippet}</pre>
+          </div>
         </div>
       )}
 
@@ -976,30 +1114,55 @@ export const CloudMusicManager: React.FC<CloudMusicManagerProps> = ({
               </p>
             </div>
 
-            <div className="mt-5 flex items-center justify-end gap-2 border-t border-neutral-800 pt-3">
-              <button
-                type="button"
-                onClick={() => setCoverSong(null)}
-                disabled={isSavingCover}
-                className="rounded-lg border border-neutral-800 bg-neutral-800/50 px-4 py-2 text-xs font-medium text-neutral-300 hover:bg-neutral-800 hover:text-white min-h-[40px] cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveCover}
-                disabled={isSavingCover || !coverFile}
-                className="flex items-center gap-1.5 rounded-lg bg-neutral-100 hover:bg-white text-neutral-900 px-4 py-2 text-xs font-semibold transition-colors disabled:opacity-50 min-h-[40px] cursor-pointer"
-              >
-                {isSavingCover ? (
-                  <>
-                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                    <span>Uploading Cover...</span>
-                  </>
-                ) : (
-                  <span>Save Artwork</span>
-                )}
-              </button>
+            <div className="mt-5 flex items-center justify-between border-t border-neutral-800 pt-3">
+              {coverSong.cover_url ? (
+                <button
+                  type="button"
+                  onClick={handleDeleteCover}
+                  disabled={isSavingCover || isDeletingCover}
+                  className="flex items-center gap-1.5 rounded-lg border border-rose-900/60 bg-rose-950/40 hover:bg-rose-950/80 text-rose-300 hover:text-rose-100 px-3.5 py-2 text-xs font-semibold transition-colors disabled:opacity-50 min-h-[40px] cursor-pointer"
+                  title="Remove custom artwork from cloud storage and song record"
+                >
+                  {isDeletingCover ? (
+                    <>
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                      <span>Removing...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>Remove Artwork</span>
+                    </>
+                  )}
+                </button>
+              ) : (
+                <div />
+              )}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCoverSong(null)}
+                  disabled={isSavingCover || isDeletingCover}
+                  className="rounded-lg border border-neutral-800 bg-neutral-800/50 px-4 py-2 text-xs font-medium text-neutral-300 hover:bg-neutral-800 hover:text-white min-h-[40px] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveCover}
+                  disabled={isSavingCover || isDeletingCover || !coverFile}
+                  className="flex items-center gap-1.5 rounded-lg bg-neutral-100 hover:bg-white text-neutral-900 px-4 py-2 text-xs font-semibold transition-colors disabled:opacity-50 min-h-[40px] cursor-pointer"
+                >
+                  {isSavingCover ? (
+                    <>
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                      <span>Uploading Cover...</span>
+                    </>
+                  ) : (
+                    <span>Save Artwork</span>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>

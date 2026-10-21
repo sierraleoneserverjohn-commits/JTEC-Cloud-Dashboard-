@@ -660,13 +660,15 @@ export async function saveProjectConfig(
   payload: {
     url: string;
     anonKey: string;
+    serviceRoleKey?: string;
     storageBucket: string;
     tableName: string;
     storageQuotaBytes: number | null;
+    managementApiToken?: string;
     projectRef?: string;
   }
 ): Promise<{ success: boolean; message: string }> {
-  // 1. If backend exists, also sync to backend
+  // 1. If backend exists, also sync to backend (stores serviceRoleKey safely on backend)
   try {
     await fetch(`/api/projects/${projectId}/config`, {
       method: 'POST',
@@ -675,7 +677,7 @@ export async function saveProjectConfig(
     });
   } catch {}
 
-  // 2. Always persist client-safe keys in localStorage
+  // 2. Always persist client-safe keys in localStorage (do not persist serviceRoleKey in browser)
   const configs = getStoredConfigs();
   const index = configs.findIndex((p) => p.id === projectId);
   if (index >= 0) {
@@ -691,7 +693,7 @@ export async function saveProjectConfig(
     saveStoredConfigs(configs);
   }
 
-  return { success: true, message: 'Configuration saved securely in browser storage!' };
+  return { success: true, message: 'Configuration saved securely!' };
 }
 
 /**
@@ -1109,6 +1111,7 @@ export async function updateSongCover(
   coverFile: File,
   oldCoverUrl?: string
 ): Promise<{ success: boolean; cover_url: string; song: any }> {
+  let backendAttempted = false;
   // 1. Try local backend proxy first
   try {
     const formData = new FormData();
@@ -1117,11 +1120,30 @@ export async function updateSongCover(
       method: 'POST',
       body: formData,
     });
+    backendAttempted = true;
+    const contentType = res.headers.get('content-type') || '';
     if (res.ok) {
-      return await res.json();
+      if (contentType.includes('application/json')) {
+        return await res.json();
+      }
+      throw new Error(`Unexpected non-JSON response (${res.status}) from cover upload endpoint`);
+    } else {
+      if (contentType.includes('application/json')) {
+        const errJson = await res.json().catch(() => null);
+        if (errJson?.error) {
+          throw new Error(errJson.error);
+        }
+      }
+      const errText = await res.text().catch(() => '');
+      const snippet = errText.slice(0, 100).replace(/<[^>]*>/g, '').trim();
+      throw new Error(`Cover upload failed (${res.status}): ${snippet || 'Server error'}`);
     }
-  } catch {
-    // Fallback to client-side
+  } catch (err: any) {
+    if (backendAttempted) {
+      // Backend was reached and gave a definitive failure
+      throw err;
+    }
+    console.warn('Backend proxy unreachable, falling back to direct client-side Supabase upload:', err.message);
   }
 
   // 2. Direct client-side Supabase
@@ -1141,10 +1163,18 @@ export async function updateSongCover(
     .from(bucket)
     .upload(coverPath, coverFile, {
       contentType: coverFile.type || 'image/jpeg',
-      upsert: true,
+      upsert: false,
     });
 
-  if (uploadErr) throw new Error(`Cover upload failed: ${uploadErr.message}`);
+  if (uploadErr) {
+    if (uploadErr.message.includes('row-level security') || (uploadErr as any).statusCode === '425' || (uploadErr as any).statusCode === '403') {
+      throw new Error(
+        `Storage RLS policy violation on bucket '${bucket}': ${uploadErr.message}. ` +
+        `Please ensure storage.objects INSERT permission is enabled for '${bucket}' in Supabase SQL Editor.`
+      );
+    }
+    throw new Error(`Cover upload failed: ${uploadErr.message}`);
+  }
 
   const publicUrl = client.storage.from(bucket).getPublicUrl(coverPath).data?.publicUrl ||
     `${config.url.replace(/\/+$/, '')}/storage/v1/object/public/${bucket}/${encodeURIComponent(coverPath)}`;
@@ -1156,22 +1186,141 @@ export async function updateSongCover(
   if (existingCols && existingCols.includes('updated_at')) dbUpdates.updated_at = new Date().toISOString();
 
   let { data: updated, error: updateErr } = await client.from(table).update(dbUpdates).eq('id', songId).select();
-  if (updateErr || !updated || updated.length === 0) {
+  if (updateErr) {
+    await client.storage.from(bucket).remove([coverPath]).catch(() => {});
+    throw new Error(`Database error updating 'cover_url' in table '${table}': ${updateErr.message}`);
+  }
+
+  if (!updated || updated.length === 0) {
     const fallback = await client.from(table).update(dbUpdates).eq('file_name', songId).select();
+    if (fallback.error) {
+      await client.storage.from(bucket).remove([coverPath]).catch(() => {});
+      throw new Error(`Database error updating 'cover_url' in table '${table}': ${fallback.error.message}`);
+    }
     updated = fallback.data;
   }
 
-  // Clean old cover if in bucket
-  if (oldCoverUrl && oldCoverUrl.includes(`/storage/v1/object/public/${bucket}/covers/`)) {
+  if (!updated || updated.length === 0) {
+    await client.storage.from(bucket).remove([coverPath]).catch(() => {});
+    throw new Error(
+      `Database RLS policy rejection: Cover was uploaded to bucket '${bucket}', but row update was rejected in table '${table}'. ` +
+      `The Row-Level Security policy restricts UPDATE on table '${table}'. Please apply the provided SQL policy migration or configure the Supabase Service Role Key.`
+    );
+  }
+
+  // Verification
+  const { data: verifyRow } = await client.from(table).select('*').eq('id', songId).limit(1);
+  if (!verifyRow || verifyRow.length === 0 || verifyRow[0].cover_url !== publicUrl) {
+    await client.storage.from(bucket).remove([coverPath]).catch(() => {});
+    throw new Error(
+      `Verification failed: Database record in '${table}' does not reflect the new cover URL after update.`
+    );
+  }
+
+  // Clean old cover if in bucket and unshared
+  if (oldCoverUrl && oldCoverUrl.includes(`/storage/v1/object/public/${bucket}/`)) {
     try {
       const oldObj = oldCoverUrl.split(`/storage/v1/object/public/${bucket}/`)[1];
       if (oldObj && oldObj !== coverPath) {
-        await client.storage.from(bucket).remove([decodeURIComponent(oldObj)]).catch(() => {});
+        const decoded = decodeURIComponent(oldObj);
+        const { data: shared } = await client.from(table).select('id').eq('cover_url', oldCoverUrl).neq('id', songId).limit(1);
+        if (!shared || shared.length === 0) {
+          await client.storage.from(bucket).remove([decoded]).catch(() => {});
+        }
       }
     } catch {}
   }
 
-  return { success: true, cover_url: publicUrl, song: updated?.[0] };
+  return { success: true, cover_url: publicUrl, song: verifyRow[0] };
+}
+
+/**
+ * Universal Remove / Delete Cover Artwork
+ */
+export async function deleteSongCover(
+  projectId: string,
+  songId: string | number,
+  currentCoverUrl?: string
+): Promise<{ success: boolean; message: string; song?: any }> {
+  let backendAttempted = false;
+  // 1. Try local backend proxy first
+  try {
+    const res = await fetch(`/api/projects/${projectId}/songs/${encodeURIComponent(String(songId))}/cover`, {
+      method: 'DELETE',
+    });
+    backendAttempted = true;
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok) {
+      if (contentType.includes('application/json')) {
+        return await res.json();
+      }
+      return { success: true, message: 'Cover artwork removed and verified.' };
+    } else {
+      if (contentType.includes('application/json')) {
+        const errJson = await res.json().catch(() => null);
+        if (errJson?.error) {
+          throw new Error(errJson.error);
+        }
+      }
+      const errText = await res.text().catch(() => '');
+      const snippet = errText.slice(0, 100).replace(/<[^>]*>/g, '').trim();
+      throw new Error(`Cover removal failed (${res.status}): ${snippet || 'Server error'}`);
+    }
+  } catch (err: any) {
+    if (backendAttempted) {
+      throw err;
+    }
+    console.warn('Backend proxy unreachable, falling back to direct client-side Supabase deletion:', err.message);
+  }
+
+  // 2. Direct client-side Supabase fallback
+  const configs = getStoredConfigs();
+  const config = configs.find((p) => p.id === projectId) || configs[0];
+  if (!config.url || !config.anonKey) throw new Error('Supabase credentials not configured.');
+  const client = getBrowserSupabaseClient(projectId, config.url, config.anonKey);
+  if (!client) throw new Error('Could not initialize Supabase client.');
+
+  const bucket = config.storageBucket || 'music';
+  const table = config.tableName || 'songs';
+
+  const dbUpdates: Record<string, any> = { cover_url: null, updated_at: new Date().toISOString() };
+  let { data: updated, error: updateErr } = await client.from(table).update(dbUpdates).eq('id', songId).select();
+  if (updateErr) throw new Error(`Database error clearing cover in table '${table}': ${updateErr.message}`);
+
+  if (!updated || updated.length === 0) {
+    const fallback = await client.from(table).update(dbUpdates).eq('file_name', songId).select();
+    if (fallback.error) throw new Error(`Database error clearing cover in table '${table}': ${fallback.error.message}`);
+    updated = fallback.data;
+  }
+
+  if (!updated || updated.length === 0) {
+    throw new Error(
+      `Database RLS policy rejection: Record could not be updated in table '${table}'. ` +
+      `Row-Level Security policy restricts UPDATE on table '${table}'. Please apply the provided SQL policy migration or configure the Supabase Service Role Key.`
+    );
+  }
+
+  // Verification
+  const { data: verifyRows } = await client.from(table).select('cover_url').eq('id', songId).limit(1);
+  if (verifyRows && verifyRows.length > 0 && verifyRows[0].cover_url !== null) {
+    throw new Error(`Verification failed: 'cover_url' is still present on song record in table '${table}'.`);
+  }
+
+  // Storage object cleanup if unshared
+  if (currentCoverUrl && currentCoverUrl.includes(`/storage/v1/object/public/${bucket}/`)) {
+    try {
+      const oldObj = currentCoverUrl.split(`/storage/v1/object/public/${bucket}/`)[1];
+      if (oldObj) {
+        const decoded = decodeURIComponent(oldObj);
+        const { data: shared } = await client.from(table).select('id').eq('cover_url', currentCoverUrl).neq('id', songId).limit(1);
+        if (!shared || shared.length === 0) {
+          await client.storage.from(bucket).remove([decoded]).catch(() => {});
+        }
+      }
+    } catch {}
+  }
+
+  return { success: true, message: 'Cover artwork removed and verified.', song: updated[0] };
 }
 
 /**
@@ -1274,15 +1423,28 @@ export async function deleteCloudSong(projectId: string, song: SongMetadataItem)
   let backendAttempted = false;
   // 1. Try local backend proxy first
   try {
-    const songKey = song.id ? String(song.id) : song.file_name;
+    const songKey = song.id ? String(song.id) : (song.file_name || song.title);
     const res = await fetch(`/api/projects/${projectId}/songs/${encodeURIComponent(songKey)}`, {
       method: 'DELETE',
     });
     backendAttempted = true;
-    if (res.ok) return true;
-    const errData = await res.json().catch(() => null);
-    if (errData?.error) {
-      throw new Error(errData.error);
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok) {
+      if (contentType.includes('application/json')) {
+        const data = await res.json();
+        return Boolean(data.success);
+      }
+      return true;
+    }
+    if (contentType.includes('application/json')) {
+      const errData = await res.json().catch(() => null);
+      if (errData?.error) {
+        throw new Error(errData.error);
+      }
+    } else {
+      const text = await res.text().catch(() => '');
+      const snippet = text.slice(0, 100).replace(/<[^>]*>/g, '').trim();
+      throw new Error(`Deletion returned HTTP status ${res.status}: ${snippet || 'Server error'}`);
     }
   } catch (err: any) {
     if (backendAttempted) {
@@ -1301,33 +1463,88 @@ export async function deleteCloudSong(projectId: string, song: SongMetadataItem)
 
   const bucket = config.storageBucket || 'music';
   const table = config.tableName || 'songs';
+  const targetId = song.id ? String(song.id) : song.file_name;
 
-  // 1. Remove database record first
-  let dbErr: any = null;
-  if (song.id !== undefined && song.id !== null) {
-    const res = await client.from(table).delete().eq('id', song.id);
-    dbErr = res.error;
+  // 1. Authoritative lookup of song row
+  let { data: existingRows } = await client.from(table).select('*').eq('id', targetId).limit(1);
+  if (!existingRows || existingRows.length === 0) {
+    const fallbackName = await client.from(table).select('*').eq('file_name', targetId).limit(1);
+    existingRows = fallbackName.data;
   }
-  if (dbErr && song.file_name) {
-    const fallback = await client.from(table).delete().eq('file_name', song.file_name);
-    dbErr = fallback.error;
-  }
-  if (dbErr) {
-    throw new Error(`Database record deletion error: ${dbErr.message}`);
+  if (!existingRows || existingRows.length === 0 && song.storage_path) {
+    const fallbackPath = await client.from(table).select('*').eq('file_path', song.storage_path).limit(1);
+    existingRows = fallbackPath.data;
   }
 
-  // 2. Remove audio and cover from storage bucket
+  const authoritativeSong = existingRows?.[0] || song;
+  const realDbId = authoritativeSong.id || song.id;
+
+  // 2. Resolve exact files to remove from storage
   const filesToDelete: string[] = [];
-  if (song.storage_path) filesToDelete.push(song.storage_path);
-  if (song.file_name && !filesToDelete.includes(song.file_name)) filesToDelete.push(song.file_name);
 
-  if (song.cover_url && song.cover_url.includes(`/storage/v1/object/public/${bucket}/`)) {
-    const coverObj = song.cover_url.split(`/storage/v1/object/public/${bucket}/`)[1];
-    if (coverObj) filesToDelete.push(decodeURIComponent(coverObj));
+  // Audio object resolution
+  if (authoritativeSong.file_path && typeof authoritativeSong.file_path === 'string') {
+    filesToDelete.push(authoritativeSong.file_path);
+  } else if (authoritativeSong.storage_path && typeof authoritativeSong.storage_path === 'string') {
+    filesToDelete.push(authoritativeSong.storage_path);
+  } else if (authoritativeSong.audio_url && authoritativeSong.audio_url.includes(`/storage/v1/object/public/${bucket}/`)) {
+    const parsedPath = authoritativeSong.audio_url.split(`/storage/v1/object/public/${bucket}/`)[1];
+    if (parsedPath) filesToDelete.push(decodeURIComponent(parsedPath));
+  } else if (authoritativeSong.file_name) {
+    filesToDelete.push(authoritativeSong.file_name);
   }
 
-  if (filesToDelete.length > 0) {
-    await client.storage.from(bucket).remove(filesToDelete).catch(() => {});
+  // Cover artwork resolution (delete only if unshared)
+  if (authoritativeSong.cover_url && authoritativeSong.cover_url.includes(`/storage/v1/object/public/${bucket}/`)) {
+    const coverObjPath = authoritativeSong.cover_url.split(`/storage/v1/object/public/${bucket}/`)[1];
+    if (coverObjPath) {
+      const decodedCover = decodeURIComponent(coverObjPath);
+      // Check if any other song uses this cover
+      const { data: sharedCovers } = await client
+        .from(table)
+        .select('id')
+        .eq('cover_url', authoritativeSong.cover_url)
+        .neq('id', realDbId)
+        .limit(1);
+
+      if (!sharedCovers || sharedCovers.length === 0) {
+        filesToDelete.push(decodedCover);
+      }
+    }
+  }
+
+  // 3. Remove cloud storage objects
+  const uniqueFilesToDelete = Array.from(new Set(filesToDelete.filter(Boolean)));
+  if (uniqueFilesToDelete.length > 0) {
+    await client.storage.from(bucket).remove(uniqueFilesToDelete).catch(() => {});
+  }
+
+  // 4. Remove database record with .select() verification
+  let { data: deletedRows, error: dbErr } = await client.from(table).delete().eq('id', realDbId).select();
+  if (dbErr || !deletedRows || deletedRows.length === 0) {
+    if (authoritativeSong.file_name) {
+      const fallback = await client.from(table).delete().eq('file_name', authoritativeSong.file_name).select();
+      if (fallback.data && fallback.data.length > 0) {
+        deletedRows = fallback.data;
+      } else if (fallback.error) {
+        throw new Error(`Database record deletion error: ${fallback.error.message}`);
+      }
+    }
+  }
+
+  if (!deletedRows || deletedRows.length === 0) {
+    throw new Error(`Database record for '${song.title}' could not be deleted from table '${table}'.`);
+  }
+
+  // 5. Verification: query table again to confirm record is gone
+  const { data: verifyRow, error: verifyErr } = await client
+    .from(table)
+    .select('id')
+    .eq('id', realDbId)
+    .limit(1);
+
+  if (!verifyErr && verifyRow && verifyRow.length > 0) {
+    throw new Error(`Verification failed: Song record still exists in Supabase table '${table}'.`);
   }
 
   return true;
@@ -1412,7 +1629,7 @@ export async function runSelfTestClientSide(projectId: string): Promise<{
   try {
     const { error: up1Err } = await client.storage
       .from(bucket)
-      .upload(song1Name, song1Bytes.buffer, { contentType: 'audio/mpeg', upsert: true });
+      .upload(song1Name, song1Bytes.buffer, { contentType: 'audio/mpeg', upsert: false });
 
     if (up1Err) {
       steps.push({
@@ -1461,7 +1678,7 @@ export async function runSelfTestClientSide(projectId: string): Promise<{
   try {
     const { error: up2Err } = await client.storage
       .from(bucket)
-      .upload(song2Name, song2Bytes.buffer, { contentType: 'audio/mpeg', upsert: true });
+      .upload(song2Name, song2Bytes.buffer, { contentType: 'audio/mpeg', upsert: false });
 
     if (up2Err) {
       steps.push({

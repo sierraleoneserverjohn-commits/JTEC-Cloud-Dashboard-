@@ -88,13 +88,15 @@ export const ProjectConfigModal: React.FC<ProjectConfigModalProps> = ({
       await saveProjectConfig(project.id, {
         url: url.trim(),
         anonKey: anonKey.trim(),
+        serviceRoleKey: serviceRoleKey.trim() || undefined,
         storageBucket: storageBucket.trim(),
         tableName: tableName.trim(),
         storageQuotaBytes: quotaBytes,
+        managementApiToken: managementToken.trim() || undefined,
         projectRef: projectRef.trim() || undefined,
       });
 
-      setSuccessMessage('Configuration saved securely!');
+      setSuccessMessage('Configuration and administrative credentials saved securely!');
       onSaved();
     } catch (err: any) {
       setErrorMessage(err.message || 'Save error');

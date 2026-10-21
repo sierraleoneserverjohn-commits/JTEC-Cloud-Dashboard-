@@ -1181,19 +1181,30 @@ app.patch('/api/projects/:id/songs/:songId', async (req, res) => {
       .eq('id', songId)
       .select();
 
-    if (updateErr || !updated || updated.length === 0) {
+    if (updateErr) {
+      throw new Error(`Database error updating metadata in table '${table}': ${updateErr.message}`);
+    }
+
+    if (!updated || updated.length === 0) {
       const fallback = await client
         .from(table)
         .update(updates)
         .eq('file_name', songId)
         .select();
       if (fallback.error) {
-        throw fallback.error;
+        throw new Error(`Database error updating metadata in table '${table}': ${fallback.error.message}`);
       }
       updated = fallback.data;
     }
 
-    res.json({ success: true, song: updated?.[0] || updates });
+    if (!updated || updated.length === 0) {
+      throw new Error(
+        `Database RLS policy rejection: Record could not be updated in table '${table}'. ` +
+        `Row-Level Security policy prevents UPDATE for this client role. Please run the provided SQL policy migration or configure the Supabase Service Role Key.`
+      );
+    }
+
+    res.json({ success: true, verified: true, song: updated[0] });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to update song metadata' });
   }
@@ -1244,10 +1255,16 @@ app.post(
         .from(bucket)
         .upload(coverPath, file.buffer, {
           contentType: file.mimetype || 'image/jpeg',
-          upsert: true,
+          upsert: false,
         });
 
       if (uploadErr) {
+        if (uploadErr.message.includes('row-level security') || (uploadErr as any).statusCode === '425' || (uploadErr as any).statusCode === '403') {
+          throw new Error(
+            `Cover upload failed: Row-Level Security (RLS) policy violation on bucket '${bucket}'. ` +
+            `Please ensure storage.objects INSERT permission is enabled for '${bucket}' in Supabase SQL Editor.`
+          );
+        }
         throw new Error(`Cover upload failed: ${uploadErr.message}`);
       }
 
@@ -1275,24 +1292,196 @@ app.post(
         .eq('id', songId)
         .select();
 
-      if (updateErr || !updated || updated.length === 0) {
+      if (updateErr) {
+        // Rollback uploaded storage cover to prevent orphaned files
+        await client.storage.from(bucket).remove([coverPath]).catch(() => {});
+        throw new Error(`Database error updating 'cover_url' in table '${table}': ${updateErr.message}`);
+      }
+
+      if (!updated || updated.length === 0) {
         const fallback = await client.from(table).update(updates).eq('file_name', songId).select();
+        if (fallback.error) {
+          await client.storage.from(bucket).remove([coverPath]).catch(() => {});
+          throw new Error(`Database error updating 'cover_url' in table '${table}': ${fallback.error.message}`);
+        }
         updated = fallback.data;
       }
 
-      // 4. Safely clean up old cover if it was in this bucket
-      if (existingSong?.cover_url && existingSong.cover_url.includes(`/storage/v1/object/public/${bucket}/covers/`)) {
+      if (!updated || updated.length === 0) {
+        // Storage upload succeeded, but database row update was rejected by RLS
+        await client.storage.from(bucket).remove([coverPath]).catch(() => {});
+        throw new Error(
+          `Database RLS policy rejection: Cover file was uploaded to bucket '${bucket}', but row update was rejected in table '${table}'. ` +
+          `The Row-Level Security policy restricts UPDATE on table '${table}'. Please apply the provided SQL policy migration or configure the Supabase Service Role Key.`
+        );
+      }
+
+      // Verification: re-query database to ensure cover_url actually persisted
+      const { data: verifyRow } = await client
+        .from(table)
+        .select('*')
+        .eq('id', updated[0]?.id || songId)
+        .limit(1);
+
+      if (!verifyRow || verifyRow.length === 0 || verifyRow[0].cover_url !== coverPublicUrl) {
+        await client.storage.from(bucket).remove([coverPath]).catch(() => {});
+        throw new Error(
+          `Verification failed: Database record in '${table}' does not reflect the new cover URL after update.`
+        );
+      }
+
+      // 4. Safely clean up old cover if it was in this bucket and not shared
+      if (existingSong?.cover_url && existingSong.cover_url.includes(`/storage/v1/object/public/${bucket}/`)) {
         try {
           const oldPath = existingSong.cover_url.split(`/storage/v1/object/public/${bucket}/`)[1];
           if (oldPath && oldPath !== coverPath) {
-            await client.storage.from(bucket).remove([decodeURIComponent(oldPath)]).catch(() => {});
+            const decodedOld = decodeURIComponent(oldPath);
+            // Check if any other track shares this cover
+            const { data: shared } = await client
+              .from(table)
+              .select('id')
+              .eq('cover_url', existingSong.cover_url)
+              .neq('id', existingSong.id)
+              .limit(1);
+            if (!shared || shared.length === 0) {
+              await client.storage.from(bucket).remove([decodedOld]).catch(() => {});
+            }
           }
         } catch {}
       }
 
-      res.json({ success: true, cover_url: coverPublicUrl, song: updated?.[0] || existingSong });
+      res.json({
+        success: true,
+        verified: true,
+        message: 'Cover uploaded and verified successfully in storage and database.',
+        cover_url: coverPublicUrl,
+        song: verifyRow[0],
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to update cover artwork' });
+    }
+  }
+);
+
+// 6c-2. Remove / Delete Cover Artwork (sets cover_url to null and cleans unshared storage object)
+app.delete(
+  '/api/projects/:id/songs/:songId/cover',
+  async (req, res) => {
+    const configs = loadProjectConfigs();
+    const config = configs.find((p) => p.id === req.params.id);
+    if (!config) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const client = getSupabaseClient(config, req.headers.authorization as string | undefined);
+    if (!client) {
+      return res.status(400).json({ error: 'Supabase client not initialized' });
+    }
+
+    const table = config.tableName || 'songs';
+    const bucket = config.storageBucket || 'music';
+    const songId = req.params.songId;
+
+    try {
+      // 1. Fetch current song row to identify existing cover
+      let { data: existingRows } = await client.from(table).select('*').eq('id', songId).limit(1);
+      if (!existingRows || existingRows.length === 0) {
+        const fallback = await client.from(table).select('*').eq('file_name', songId).limit(1);
+        existingRows = fallback.data;
+      }
+      const existingSong = existingRows?.[0] || null;
+
+      if (!existingSong) {
+        return res.status(404).json({ error: `Song with ID '${songId}' not found in table '${table}'.` });
+      }
+
+      const currentCoverUrl = existingSong.cover_url || existingSong.image_url;
+      if (!currentCoverUrl) {
+        return res.status(400).json({ error: `Song '${existingSong.title}' does not have a custom cover image to remove.` });
+      }
+
+      // 2. Prepare database updates to nullify cover references
+      const sampleCols = Object.keys(existingSong);
+      const updates: Record<string, any> = {
+        cover_url: null,
+      };
+      if (sampleCols.includes('image_url')) {
+        updates.image_url = null;
+      }
+      if (sampleCols.includes('updated_at')) {
+        updates.updated_at = new Date().toISOString();
+      }
+
+      // 3. Update database row
+      let { data: updated, error: updateErr } = await client
+        .from(table)
+        .update(updates)
+        .eq('id', existingSong.id)
+        .select();
+
+      if (updateErr) {
+        throw new Error(`Database error removing cover in table '${table}': ${updateErr.message}`);
+      }
+
+      if (!updated || updated.length === 0) {
+        const fallback = await client.from(table).update(updates).eq('file_name', existingSong.file_name).select();
+        if (fallback.error) {
+          throw new Error(`Database error removing cover in table '${table}': ${fallback.error.message}`);
+        }
+        updated = fallback.data;
+      }
+
+      if (!updated || updated.length === 0) {
+        throw new Error(
+          `Database RLS policy rejection: Record could not be updated in table '${table}'. ` +
+          `Row-Level Security policy prevents UPDATE on table '${table}'. Please apply the provided SQL policy migration or configure the Supabase Service Role Key.`
+        );
+      }
+
+      // 4. Verification: Query database again to ensure cover_url is truly null
+      const { data: verifyRows } = await client
+        .from(table)
+        .select('*')
+        .eq('id', existingSong.id)
+        .limit(1);
+
+      if (verifyRows && verifyRows.length > 0 && verifyRows[0].cover_url !== null) {
+        throw new Error(`Verification failed: 'cover_url' is still present on song record in table '${table}'.`);
+      }
+
+      // 5. Remove the cover file from storage if it belonged to this bucket and is not shared
+      let removedStorageObject: string | null = null;
+      if (currentCoverUrl.includes(`/storage/v1/object/public/${bucket}/`)) {
+        const oldPath = currentCoverUrl.split(`/storage/v1/object/public/${bucket}/`)[1];
+        if (oldPath) {
+          const decodedPath = decodeURIComponent(oldPath);
+          const { data: sharedRows } = await client
+            .from(table)
+            .select('id')
+            .eq('cover_url', currentCoverUrl)
+            .neq('id', existingSong.id)
+            .limit(1);
+
+          if (!sharedRows || sharedRows.length === 0) {
+            const { error: removeErr } = await client.storage.from(bucket).remove([decodedPath]);
+            if (!removeErr) {
+              removedStorageObject = decodedPath;
+            } else {
+              console.warn('Storage cover removal notice:', removeErr.message);
+            }
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        verified: true,
+        message: `Cover artwork removed and verified for '${existingSong.title}'.`,
+        removedStorageObject,
+        song: verifyRows?.[0] || updated[0],
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to remove cover artwork' });
     }
   }
 );
@@ -1399,7 +1588,7 @@ app.post(
   }
 );
 
-// 6e. Delete Cloud Song (removes DB record, storage audio, and storage cover artwork)
+// 6e. Delete Cloud Song (removes DB record, storage audio, and storage cover artwork with full verification)
 app.delete('/api/projects/:id/songs/:songId', async (req, res) => {
   const configs = loadProjectConfigs();
   const config = configs.find((p) => p.id === req.params.id);
@@ -1414,53 +1603,121 @@ app.delete('/api/projects/:id/songs/:songId', async (req, res) => {
 
   const table = config.tableName || 'songs';
   const bucket = config.storageBucket || 'music';
-  const songId = req.params.songId;
+  const rawSongId = req.params.songId;
 
   try {
-    // 1. Fetch song record to identify storage objects
-    let { data: existingRows } = await client.from(table).select('*').eq('id', songId).limit(1);
+    // 1. Authoritative song record lookup (by primary key ID, file_name, or file_path)
+    let { data: existingRows } = await client.from(table).select('*').eq('id', rawSongId).limit(1);
     if (!existingRows || existingRows.length === 0) {
-      const fallback = await client.from(table).select('*').eq('file_name', songId).limit(1);
-      existingRows = fallback.data;
+      const fallbackName = await client.from(table).select('*').eq('file_name', rawSongId).limit(1);
+      existingRows = fallbackName.data;
     }
+    if (!existingRows || existingRows.length === 0) {
+      const fallbackPath = await client.from(table).select('*').eq('file_path', rawSongId).limit(1);
+      existingRows = fallbackPath.data;
+    }
+
     const song = existingRows?.[0] || null;
+    if (!song) {
+      return res.status(404).json({
+        error: `Song with identifier '${rawSongId}' was not found in database table '${table}'.`,
+      });
+    }
 
-    // 2. Remove audio file from storage
+    const realDbId = song.id;
+
+    // 2. Identify and resolve exact storage objects for deletion
     const filesToDelete: string[] = [];
-    if (song) {
-      if (song.storage_path) filesToDelete.push(song.storage_path);
-      else if (song.file_path) filesToDelete.push(song.file_path);
-      else if (song.file_name) filesToDelete.push(song.file_name);
 
-      // Check if cover artwork is stored in bucket
-      if (song.cover_url && song.cover_url.includes(`/storage/v1/object/public/${bucket}/`)) {
-        const coverObj = song.cover_url.split(`/storage/v1/object/public/${bucket}/`)[1];
-        if (coverObj) filesToDelete.push(decodeURIComponent(coverObj));
+    // Audio storage path resolution
+    if (song.file_path && typeof song.file_path === 'string') {
+      filesToDelete.push(song.file_path);
+    } else if (song.storage_path && typeof song.storage_path === 'string') {
+      filesToDelete.push(song.storage_path);
+    } else if (song.audio_url && song.audio_url.includes(`/storage/v1/object/public/${bucket}/`)) {
+      const parsedAudioPath = song.audio_url.split(`/storage/v1/object/public/${bucket}/`)[1];
+      if (parsedAudioPath) {
+        filesToDelete.push(decodeURIComponent(parsedAudioPath));
       }
-    } else {
-      filesToDelete.push(songId);
+    } else if (song.file_name) {
+      filesToDelete.push(song.file_name);
     }
 
-    if (filesToDelete.length > 0) {
-      const { error: storageErr } = await client.storage.from(bucket).remove(filesToDelete);
+    // Cover artwork storage path resolution (check if unshared before deleting)
+    if (song.cover_url && song.cover_url.includes(`/storage/v1/object/public/${bucket}/`)) {
+      const coverObjPath = song.cover_url.split(`/storage/v1/object/public/${bucket}/`)[1];
+      if (coverObjPath) {
+        const decodedCoverPath = decodeURIComponent(coverObjPath);
+        // Verify no other song references this same cover artwork
+        const { data: sharedCovers } = await client
+          .from(table)
+          .select('id')
+          .eq('cover_url', song.cover_url)
+          .neq('id', realDbId)
+          .limit(1);
+
+        if (!sharedCovers || sharedCovers.length === 0) {
+          filesToDelete.push(decodedCoverPath);
+        }
+      }
+    }
+
+    // 3. Remove cloud storage objects
+    let storageNotice: string | null = null;
+    const uniqueFilesToDelete = Array.from(new Set(filesToDelete.filter(Boolean)));
+    if (uniqueFilesToDelete.length > 0) {
+      const { error: storageErr } = await client.storage.from(bucket).remove(uniqueFilesToDelete);
       if (storageErr) {
-        console.warn('Storage deletion warning:', storageErr.message);
+        storageNotice = `Storage removal notice: ${storageErr.message}`;
+        console.warn('Storage deletion notice:', storageErr.message);
       }
     }
 
-    // 3. Remove row from database table
-    let { error: dbErr } = await client.from(table).delete().eq('id', songId);
+    // 4. Delete database record with .select() to verify row deletion
+    let { data: deletedRows, error: dbErr } = await client.from(table).delete().eq('id', realDbId).select();
     if (dbErr) {
-      const fallback = await client.from(table).delete().eq('file_name', songId);
-      dbErr = fallback.error;
+      throw new Error(`Database error deleting record from '${table}': ${dbErr.message}`);
     }
-    if (dbErr) {
-      throw new Error(`Database record deletion error: ${dbErr.message}`);
+
+    if (!deletedRows || deletedRows.length === 0) {
+      // Secondary fallback by file_name if primary ID failed
+      const fallbackDel = await client.from(table).delete().eq('file_name', song.file_name).select();
+      if (fallbackDel.error) {
+        throw new Error(`Database error deleting record from '${table}': ${fallbackDel.error.message}`);
+      }
+      deletedRows = fallbackDel.data;
+    }
+
+    if (!deletedRows || deletedRows.length === 0) {
+      throw new Error(
+        `Database RLS policy rejection: Record for '${song.title}' could not be deleted from table '${table}'. ` +
+        `The Supabase Row-Level Security policy restricts DELETE on table '${table}'. ` +
+        `To resolve this: Either save the Supabase Service Role Key in Project Settings for backend admin access, or execute the provided SQL migration in your Supabase SQL Editor.`
+      );
+    }
+
+    // 5. Verification step: Query Supabase database again to confirm the record is truly gone
+    const { data: verifyRows, error: verifyErr } = await client
+      .from(table)
+      .select('id, title')
+      .eq('id', realDbId)
+      .limit(1);
+
+    if (!verifyErr && verifyRows && verifyRows.length > 0) {
+      throw new Error(
+        `Verification failed: Database record for '${song.title}' still exists in Supabase table '${table}'.`
+      );
     }
 
     res.json({
       success: true,
-      message: `Successfully deleted song '${song?.title || songId}' from cloud database and storage.`,
+      verified: true,
+      message: storageNotice
+        ? `Song record deleted from database table '${table}'. Storage notice: ${storageNotice}`
+        : `Song deleted and verified: '${song.title}' has been removed from cloud database and storage.`,
+      deletedSong: song,
+      removedStorageObjects: uniqueFilesToDelete,
+      storageNotice: storageNotice || undefined,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to delete cloud song' });
@@ -1529,7 +1786,7 @@ app.post('/api/projects/:id/run-self-test', async (req, res) => {
 
     const { error: up1Err } = await client.storage
       .from(config.storageBucket)
-      .upload(song1Name, testSong1Buffer, { contentType: 'audio/mpeg', upsert: true });
+      .upload(song1Name, testSong1Buffer, { contentType: 'audio/mpeg', upsert: false });
 
     if (up1Err) {
       steps.push({
@@ -1567,7 +1824,7 @@ app.post('/api/projects/:id/run-self-test', async (req, res) => {
 
     const { error: up2Err } = await client.storage
       .from(config.storageBucket)
-      .upload(song2Name, testSong2Buffer, { contentType: 'audio/mpeg', upsert: true });
+      .upload(song2Name, testSong2Buffer, { contentType: 'audio/mpeg', upsert: false });
 
     if (up2Err) {
       steps.push({

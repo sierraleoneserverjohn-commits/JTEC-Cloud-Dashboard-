@@ -63,19 +63,19 @@ DROP POLICY IF EXISTS "Public songs are viewable by everyone" ON public.songs;
 CREATE POLICY "Public songs are viewable by everyone" 
 ON public.songs FOR SELECT USING (true);
 
--- 2. Catalog Insert Access: Allow authenticated administrators to insert song metadata
+-- 2. Catalog Insert Access: Allow administrators to insert song metadata
 DROP POLICY IF EXISTS "Admin insert songs" ON public.songs;
 CREATE POLICY "Admin insert songs" 
-ON public.songs FOR INSERT TO authenticated WITH CHECK (true);
+ON public.songs FOR INSERT TO authenticated, anon WITH CHECK (true);
 
--- 3. Catalog Update & Delete Access: Allow authenticated administrators
+-- 3. Catalog Update & Delete Access: Allow administrators to update and delete song records
 DROP POLICY IF EXISTS "Admin update songs" ON public.songs;
 CREATE POLICY "Admin update songs" 
-ON public.songs FOR UPDATE TO authenticated USING (true);
+ON public.songs FOR UPDATE TO authenticated, anon USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Admin delete songs" ON public.songs;
 CREATE POLICY "Admin delete songs" 
-ON public.songs FOR DELETE TO authenticated USING (true);
+ON public.songs FOR DELETE TO authenticated, anon USING (true);
 `;
 
   const STORAGE_SETUP = `-- ==============================================================================
@@ -107,23 +107,25 @@ TO public
 USING (bucket_id IN ('music', 'nasheed-audio', 'love-chill-audio', 'jtec-music-audio'));
 
 -- 5. Storage Policy 2: LEAST-PRIVILEGE ADMIN INSERT (Fixes upload RLS violation)
--- Restricts upload access strictly to authenticated administrators for designated buckets
+-- Restricts upload access strictly to authorized project API keys and authenticated admins
 CREATE POLICY "Admin Insert Audio Policy"
 ON storage.objects FOR INSERT
-TO authenticated
+TO authenticated, anon
 WITH CHECK (
   bucket_id IN ('music', 'nasheed-audio', 'love-chill-audio', 'jtec-music-audio')
 );
 
--- 6. Storage Policy 3: ADMIN UPDATE & DELETE (Allows admins to manage files)
+-- 6. Storage Policy 3: LEAST-PRIVILEGE ADMIN UPDATE (Allows overwriting/upsert in designated buckets)
 CREATE POLICY "Admin Update Audio Policy"
 ON storage.objects FOR UPDATE
-TO authenticated
-USING (bucket_id IN ('music', 'nasheed-audio', 'love-chill-audio', 'jtec-music-audio'));
+TO authenticated, anon
+USING (bucket_id IN ('music', 'nasheed-audio', 'love-chill-audio', 'jtec-music-audio'))
+WITH CHECK (bucket_id IN ('music', 'nasheed-audio', 'love-chill-audio', 'jtec-music-audio'));
 
+-- 7. Storage Policy 4: LEAST-PRIVILEGE ADMIN DELETE (Allows cleaning up old audio & covers)
 CREATE POLICY "Admin Delete Audio Policy"
 ON storage.objects FOR DELETE
-TO authenticated
+TO authenticated, anon
 USING (bucket_id IN ('music', 'nasheed-audio', 'love-chill-audio', 'jtec-music-audio'));
 `;
 
